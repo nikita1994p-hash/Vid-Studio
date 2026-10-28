@@ -1,0 +1,8 @@
+# secrets - API keys live only in .env on this computer
+.env
+# tokens, videos, music, settings, queues - all local
+data/
+# Python and Office leftovers
+__pycache__/
+*.pyc
+~$*

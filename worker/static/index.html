@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vid Studio</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23ff0033'/%3E%3Cpath d='M9 7l8 5-8 5z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="icon-btn" id="menu-btn" aria-label="Menu">☰</button>
+    <a class="brand" href="#/">
+      <span class="logo">▶</span><span>Vid</span><span class="brand-sub">Studio</span>
+    </a>
+    <div class="topbar-spacer"></div>
+    <span class="pill" id="mode-pill" title="Settings from .env">…</span>
+    <div class="create-wrap">
+      <button class="btn btn-outline" id="create-btn">＋ CREATE</button>
+      <div class="menu" id="create-menu" hidden>
+        <button data-action="new">🎬 New AI video</button>
+        <button data-action="upload">⬆ Upload video</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="sidebar" id="sidebar">
+    <div class="channel">
+      <div class="avatar">▶</div>
+      <div class="channel-name">Your channel</div>
+      <div class="channel-sub" id="channel-niche"></div>
+    </div>
+    <a href="#/" data-nav="dashboard"><span>▦</span>Dashboard</a>
+    <a href="#/content" data-nav="content"><span>▤</span>Content</a>
+    <a href="#/topics" data-nav="topics"><span>☰</span>Topics</a>
+    <a href="#/ab" data-nav="ab"><span>⚖</span>A/B tests</a>
+    <a href="#/earnings" data-nav="earnings"><span>$</span>Earnings</a>
+    <a href="#/accounts" data-nav="accounts"><span>👤</span>Accounts</a>
+    <a href="#/settings" data-nav="settings"><span>⚙</span>Settings</a>
+    <div class="sidebar-foot">
+      <a href="http://localhost:5678" target="_blank" rel="noopener"><span>⛓</span>Open n8n</a>
+    </div>
+  </nav>
+
+  <main id="view"></main>
+
+  <dialog id="new-dialog">
+    <form method="dialog" id="new-form">
+      <h2>New AI video</h2>
+      <label>Topic <span class="muted">(leave empty: the next one from Topics, or the AI picks one)</span>
+        <input name="topic" placeholder="e.g. Why the Golden Gate Bridge is orange" maxlength="200">
+      </label>
+      <p class="muted" id="next-part-hint" hidden></p>
+      <details>
+        <summary>✍ Write my own script</summary>
+        <label><span class="muted">First line = the hook, then one line per scene. The AI only adds pictures,
+          on-screen numbers, the loop line and the title.</span>
+          <textarea name="script" rows="7" placeholder="This boring machine makes $2,000 a month.&#10;A used ice vending machine costs about twelve thousand dollars.&#10;…"></textarea>
+        </label>
+      </details>
+      <label>Versions to make <span class="muted">(A/B test: each gets its own hook, title, voice, music and pictures)</span>
+        <select name="variants">
+          <option value="1">1 — just one video</option><option value="2">2 versions</option>
+          <option value="3">3 versions</option><option value="4">4 versions</option><option value="5">5 versions</option>
+        </select>
+      </label>
+      <details>
+        <summary>⚙ Options for this video <span class="muted">(empty = as in Settings)</span></summary>
+        <div class="opt-grid" id="new-options"></div>
+      </details>
+      <label class="check"><input type="checkbox" name="mock"> Test mode — free, no Gemini (test pattern images, real voice)</label>
+      <label class="check"><input type="checkbox" name="video"> Live video hook in the first seconds (≈ +$0.80)</label>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn btn-text" formnovalidate>Cancel</button>
+        <button value="ok" class="btn btn-primary">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="upload-dialog">
+    <form method="dialog" id="upload-form">
+      <h2>Upload video</h2>
+      <label class="drop" id="drop">
+        <input type="file" name="file" accept="video/*" required>
+        <span id="drop-text">Drag a video here or click to choose (.mp4, .mov, .webm)</span>
+      </label>
+      <label>Title (required)<input name="title" required maxlength="100"></label>
+      <label>Description<textarea name="description" rows="3"></textarea></label>
+      <label>Tags <span class="muted">(comma separated)</span><input name="tags"></label>
+      <progress id="upload-progress" max="100" value="0" hidden></progress>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn btn-text" formnovalidate>Cancel</button>
+        <button value="ok" class="btn btn-primary">Upload</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

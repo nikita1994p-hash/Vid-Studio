@@ -1,0 +1,208 @@
+{
+  "id": "TwAPdIU6eqh6KQN1",
+  "name": "VidAuto: Make & Publish",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1",
+      "name": "Запустить вручную",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "a2",
+      "name": "Каждый день в 9:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://worker:8000/produce",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": {
+          "timeout": 1800000
+        }
+      },
+      "id": "a3",
+      "name": "Сделать ролик",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://worker:8000/social/defaults",
+        "options": {}
+      },
+      "id": "a4",
+      "name": "Куда постить",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vidauto-publish",
+        "options": {}
+      },
+      "id": "a5",
+      "name": "Кнопка из Студии",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        520,
+        360
+      ],
+      "webhookId": "vidauto-publish"
+    },
+    {
+      "parameters": {
+        "jsCode": "// one item per platform; works for both starts (daily run and the Studio button)\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  if (j.body && j.body.job_id) {\n    for (const p of (j.body.platforms || ['youtube'])) {\n      out.push({ json: { job_id: j.body.job_id, platform: p, mode: j.body.mode || 'auto' } });\n    }\n  } else {\n    const jobId = $('Сделать ролик').first().json.job_id;\n    for (const p of (j.platforms || [])) out.push({ json: { job_id: jobId, platform: p, mode: 'auto' } });\n  }\n}\nreturn out;"
+      },
+      "id": "a6",
+      "name": "По платформам",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://worker:8000/social/' + $json.platform + '/post' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ job_id: $json.job_id, mode: $json.mode }) }}",
+        "options": {
+          "timeout": 1800000
+        }
+      },
+      "id": "a7",
+      "name": "Опубликовать",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        200
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "## VidAuto: ролик и публикация\n**Каждый день / вручную:** Сделать ролик → Куда постить (DEFAULT_PLATFORMS из настроек Студии, только подключённые) → Опубликовать\n**Кнопка «Publish» в Студии** (http://localhost:8000) → сразу Опубликовать на выбранные платформы\n\nВходы в YouTube / TikTok / Instagram / Facebook / Threads / X делаются в Студии: **Accounts**. Здесь ключи не нужны — загрузку делает worker, n8n решает когда и куда.\n\nОшибка на одной платформе не останавливает остальные: смотрите Executions.",
+        "height": 300,
+        "width": 520
+      },
+      "id": "a8",
+      "name": "Подсказка",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Запустить вручную": {
+      "main": [
+        [
+          {
+            "node": "Сделать ролик",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Каждый день в 9:00": {
+      "main": [
+        [
+          {
+            "node": "Сделать ролик",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Сделать ролик": {
+      "main": [
+        [
+          {
+            "node": "Куда постить",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Куда постить": {
+      "main": [
+        [
+          {
+            "node": "По платформам",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Кнопка из Студии": {
+      "main": [
+        [
+          {
+            "node": "По платформам",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "По платформам": {
+      "main": [
+        [
+          {
+            "node": "Опубликовать",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "active": false
+}

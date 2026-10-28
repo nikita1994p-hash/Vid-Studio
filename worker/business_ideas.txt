@@ -1,0 +1,397 @@
+Laundromat
+Ice vending machine
+Pressure washing driveways
+Window cleaning for storefronts
+Gutter cleaning
+Holiday light installation
+Bounce house rentals
+Party tent and table rentals
+Porta-potty rentals
+Self-storage units
+Boat and RV storage lot
+Car wash (self-service bays)
+Mobile tire repair
+Mobile windshield chip repair
+Paintless dent repair
+Headlight restoration
+Mobile oil change
+Mobile mechanic
+Used car flipping
+Golf cart rentals
+Bike rentals in a tourist town
+Kayak and paddleboard rentals
+Moving labor (load and unload only)
+Junk hauling with a pickup
+Furniture assembly
+TV wall mounting
+Handyman service
+Drywall patching
+Interior painting
+Cabinet painting and refinishing
+Epoxy garage floors
+Deck staining and sealing
+Fence installation
+Fence staining
+Concrete driveway sealing
+Asphalt sealcoating
+Pool cleaning route
+Hot tub repair
+Lawn mowing route
+Leaf removal
+Aeration and overseeding
+Mulch delivery and installation
+Snow plowing
+Sidewalk snow shoveling route
+Firewood delivery
+Christmas tree lot
+Pumpkin patch
+Tree trimming
+Stump grinding
+Irrigation system repair
+Sprinkler winterization
+Landscape lighting installation
+Artificial turf installation
+Gravel and topsoil delivery
+Pest control
+Mosquito spraying
+Bed bug heat treatment
+Termite inspection
+Wildlife and raccoon removal
+Bee hive removal
+Chimney sweeping
+Air duct cleaning
+Carpet cleaning
+Upholstery cleaning
+Tile and grout cleaning
+Mattress cleaning
+Rug cleaning pickup and delivery
+Move-out cleaning
+Airbnb turnover cleaning
+Post-construction cleaning
+Office cleaning (janitorial)
+Medical office cleaning
+Restaurant hood cleaning
+Grease trap cleaning
+Commercial kitchen equipment repair
+Vending machines (snacks and drinks)
+Micro markets in offices
+Claw machines and arcade games
+Massage chairs in malls
+Coin-operated laundry in apartment buildings
+Bulk candy machines
+Air and vacuum machines at gas stations
+EV charging stations
+ATM placement
+Photo booth rentals
+360 video booth rentals
+Wedding DJ
+Karaoke equipment rental
+Event lighting rental
+Wedding officiant
+Balloon decor
+Party favor and gift bags
+Face painting for parties
+Kids party entertainer
+Petting zoo for events
+Mobile coffee cart
+Food truck
+Shaved ice stand
+Hot dog cart
+Kettle corn stand at markets
+Lemonade trailer at events
+Mobile bar service
+Mobile ice cream truck
+Cookie delivery bakery from home
+Cottage food baking
+Custom cakes from home
+Meal prep delivery
+Personal chef
+Catering for small offices
+Barbecue pop-ups
+Hot sauce brand
+Spice blend brand
+Jerky brand
+Honey from backyard beehives
+Microgreens for restaurants
+Mushroom farming
+Egg sales from backyard chickens
+Hydroponic lettuce
+Cut flower farm
+Christmas wreath sales
+Firewood bundles for campgrounds
+Pallet recycling
+Scrap metal collection
+Appliance repair
+Appliance recycling pickup
+Used appliance resale
+Electronics recycling
+Phone screen repair
+Laptop repair
+Computer setup for seniors
+Home Wi-Fi installation
+Smart home installation
+Security camera installation
+Smart lock installation
+Locksmith
+Garage door repair
+Ceiling fan installation
+Electrician (licensed trade)
+Plumbing (licensed trade)
+HVAC filter delivery subscription
+HVAC maintenance plans
+Water heater installation
+Water softener installation
+Septic tank pumping
+Well water testing
+Radon testing
+Mold inspection
+Home inspection
+Energy audits
+Solar panel cleaning
+Roof cleaning (soft wash)
+Roof repair
+Siding repair
+Window tinting for cars
+Window tinting for homes
+Vinyl wraps for cars
+Ceramic coating for cars
+Boat detailing
+RV detailing
+Aircraft detailing
+Fleet truck washing
+Parking lot sweeping
+Sign installation
+Vinyl lettering for trucks
+Custom T-shirt printing
+Embroidery for local businesses
+Screen printing shop
+Sticker printing
+Banner and yard sign printing
+Promotional products reseller
+Trophy and awards shop
+Laser engraving
+3D printing custom parts
+Custom woodworking
+Picture framing
+Furniture flipping
+Furniture reupholstery
+Antique restoration
+Estate sale company
+Garage sale flipping
+Thrift store flipping online
+Storage unit auction flipping
+Pallet liquidation resale
+Sneaker resale
+Vintage clothing resale
+Book reselling
+Trading card resale
+Video game resale
+Pawn shop
+Kids clothing consignment store
+Bridal dress consignment
+Tuxedo rental
+Costume rental
+Tool rental
+Dumpster bag service
+Heavy equipment rental
+Skid steer services
+Excavation and grading
+Land clearing
+Pond cleaning
+Dock building
+Boat repair
+Small engine repair
+Lawn mower repair
+Knife and chainsaw sharpening
+Bike repair
+E-bike repair
+Scooter rentals
+Golf ball recycling
+Golf club repair
+Batting cage rental
+Pickleball court rentals
+Indoor playground
+Escape room
+Axe throwing
+Mini golf course
+Go-kart track
+Paintball field
+Laser tag arena
+Rage room
+Board game cafe
+Esports gaming lounge
+Arcade bar
+Roller skating rink
+Fishing bait shop
+Hunting land leasing
+Fishing charter
+Campground
+Glamping site
+Tiny house rentals
+Airbnb arbitrage
+Short-term rental management
+Property management
+Duplex house hacking
+Mobile home park
+Parking lot rental
+Billboard rental
+Cell tower land lease
+Home daycare
+After-school pickup and care
+Tutoring
+SAT and ACT prep
+Music lessons
+Swim lessons
+Driving school
+Dance studio
+Martial arts gym
+Yoga studio
+Personal trainer
+Boot camp fitness classes
+24-hour gym
+Massage therapy
+Medical courier
+Pharmacy delivery
+Senior home care (non-medical)
+Senior move managers
+Adult day care
+Non-emergency medical transport
+Hearing aid store
+Dental lab
+Medical billing
+Mobile notary for loan signings
+Tax preparation
+Bookkeeping
+Payroll services
+Insurance agency
+Real estate photography
+Drone photography
+Wedding photography
+Pet photography
+Headshot photography
+Video production for local businesses
+Social media management for restaurants
+Website design for contractors
+Local SEO agency
+Answering service
+Virtual assistant agency
+Resume writing
+Same-day courier
+Box truck delivery contracts
+Hotshot trucking
+Car hauling
+Freight dispatching
+Cargo van expedited freight
+Moving company
+Piano moving
+Gun safe moving
+Packing service
+Pack and ship store
+Mailbox rental
+Print and copy shop
+Dry cleaning drop-off
+Laundry pickup and delivery
+Tailoring and alterations
+Shoe repair
+Watch repair
+Jewelry repair
+Dog walking
+Dog grooming van
+Pet sitting
+Dog daycare
+Dog boarding kennel
+Dog training
+Pet food delivery
+Aquarium maintenance
+Horse boarding
+Farrier
+Mobile vet clinic
+Pet cremation
+Florist
+Plant nursery
+Office plant care
+Christmas decorating for businesses
+Closet organization
+Home organizing
+Garage organization systems
+Shed building
+Playset installation
+Basketball hoop installation
+Pool table moving
+Gym equipment assembly
+Bathtub refinishing
+Countertop installation
+Flooring installation
+Tile installation
+Kitchen backsplash installation
+Shower door installation
+Blinds and shades installation
+Wallpaper installation
+Popcorn ceiling removal
+Insulation installation
+Basement waterproofing
+Foundation repair
+Crawl space encapsulation
+Sump pump installation
+Generator installation
+EV charger installation
+Curb address painting
+Dumpster pad cleaning
+Restaurant bin cleaning
+Graffiti removal
+High-rise window washing
+Gutter guard installation
+Sauna installation
+Home gym builds
+Tanning salon
+Mobile spray tan
+Nail salon
+Salon suite rental
+Barbershop
+Eyelash extensions
+Eyebrow threading kiosk
+Teeth whitening kiosk
+Med spa
+Tattoo shop
+Tattoo removal
+Bridal hair and makeup
+Wig shop
+Beauty supply store
+Candle making
+Soap making
+Bath bomb brand
+Print-on-demand Etsy shop
+Laser-cut signs on Etsy
+Custom dog collars
+Handmade jewelry
+Leather goods
+Cutting boards from scrap wood
+Resin river tables
+Pottery studio
+Paint and sip studio
+Cooking classes
+Craft brewery
+Coffee roastery
+Kombucha brand
+Juice bar
+Bubble tea shop
+Donut shop
+Bagel shop
+Pizza by the slice
+Taco stand
+Ghost kitchen
+Commissary kitchen rental
+Farmers market vendor
+Flea market booth
+Convenience store
+Liquor store
+Tire shop
+Auto body shop
+Auto glass replacement
+Towing service
+Junkyard (auto salvage)
+Car rental on Turo
+Party bus rental
+Airport shuttle service
+Charter bus company
+Laundry vending route
