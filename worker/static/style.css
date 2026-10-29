@@ -277,3 +277,32 @@ tr.winner td { background: #2ba64018; }
 .earn .income-form { margin: 8px 0 4px; }
 .earn table.compact td:first-child { white-space: nowrap; }
 .topic-note { font-size: 12px; margin-left: 4px; }
+
+/* accounts and channels */
+.menu a { display: block; padding: 10px 16px; color: var(--text); }
+.menu a:hover { background: var(--line); }
+.menu-note { padding: 6px 16px 10px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); margin-bottom: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-btn { width: 36px; height: 36px; padding: 0; margin-left: 8px; background: var(--blue); color: #0f0f0f; font-weight: 700; font-size: 15px; }
+.user-btn:hover { background: var(--blue); filter: brightness(1.1); }
+.channel-pick { width: 100%; margin-top: 0; text-align: center; font-weight: 500; }
+.channel-manage { display: inline-block; margin-top: 8px; font-size: 12px; }
+.channel-form input[name=name] { flex: 1; min-width: 220px; margin-top: 0; }
+.channel-form select, .channel-form .btn { margin-top: 0; }
+.channel-card { margin-top: 16px; }
+.channel-card .ch-name { flex: 1; min-width: 200px; margin-top: 0; }
+.channel-card .ch-confirm { margin-top: 0; }
+.small { font-size: 12px; }
+.auth-page { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+.auth-card { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 28px; }
+.auth-brand { font-size: 22px; justify-content: center; display: flex; }
+.auth-tabs { margin: 16px 0; }
+.auth-submit { width: 100%; margin-top: 16px; }
+.auth-card .error-box { margin: 12px 0 0; }
+.channel-form select { width: auto; }
+.users-bar #user-search { flex: 1; min-width: 220px; margin-top: 0; }
+.users-table td { vertical-align: top; }
+.user-id { display: inline-block; margin-top: 4px; font-size: 11px; color: var(--muted); cursor: copy; }
+.user-actions { white-space: nowrap; }
+.user-actions .btn { padding: 4px 8px; }
+.sidebar a[hidden] { display: none; }

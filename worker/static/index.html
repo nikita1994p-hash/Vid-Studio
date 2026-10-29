@@ -22,13 +22,23 @@
         <button data-action="upload">⬆ Upload video</button>
       </div>
     </div>
+    <div class="create-wrap">
+      <button class="icon-btn user-btn" id="user-btn" aria-label="Account">●</button>
+      <div class="menu menu-right" id="user-menu" hidden>
+        <div class="menu-note" id="user-email"></div>
+        <a href="#/account">👤 My account</a>
+        <a href="#/users" id="users-link" hidden>👥 Users</a>
+        <button data-action="logout">↪ Sign out</button>
+      </div>
+    </div>
   </header>
 
   <nav class="sidebar" id="sidebar">
     <div class="channel">
       <div class="avatar">▶</div>
-      <div class="channel-name">Your channel</div>
+      <select class="channel-pick" id="channel-pick" aria-label="Channel"></select>
       <div class="channel-sub" id="channel-niche"></div>
+      <a class="channel-manage" href="#/channels">Manage channels</a>
     </div>
     <a href="#/" data-nav="dashboard"><span>▦</span>Dashboard</a>
     <a href="#/content" data-nav="content"><span>▤</span>Content</a>
@@ -37,8 +47,11 @@
     <a href="#/earnings" data-nav="earnings"><span>$</span>Earnings</a>
     <a href="#/accounts" data-nav="accounts"><span>👤</span>Accounts</a>
     <a href="#/settings" data-nav="settings"><span>⚙</span>Settings</a>
+    <a href="#/users" data-nav="users" id="nav-users" hidden><span>👥</span>Users</a>
+    <a href="#/account" data-nav="account"><span>🔑</span>My account</a>
     <div class="sidebar-foot">
       <a href="http://localhost:5678" target="_blank" rel="noopener"><span>⛓</span>Open n8n</a>
+      <a href="#" data-action="logout" class="nav-logout"><span>↪</span>Log out</a>
     </div>
   </nav>
 

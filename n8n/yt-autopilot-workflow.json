@@ -40,7 +40,7 @@
         "specifyBody": "json",
         "jsonBody": "{}",
         "options": {
-          "timeout": 1800000
+          "timeout": 3600000
         }
       },
       "id": "a3",
@@ -84,7 +84,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// one item per platform; works for both starts (daily run and the Studio button)\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  if (j.body && j.body.job_id) {\n    for (const p of (j.body.platforms || ['youtube'])) {\n      out.push({ json: { job_id: j.body.job_id, platform: p, mode: j.body.mode || 'auto' } });\n    }\n  } else {\n    const jobId = $('Сделать ролик').first().json.job_id;\n    for (const p of (j.platforms || [])) out.push({ json: { job_id: jobId, platform: p, mode: 'auto' } });\n  }\n}\nreturn out;"
+        "jsCode": "// one item per platform; works for both starts (daily run: every channel's video; Studio button: one video)\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  if (j.body && j.body.job_id) {\n    for (const p of (j.body.platforms || ['youtube'])) {\n      out.push({ json: { job_id: j.body.job_id, platform: p, mode: j.body.mode || 'auto' } });\n    }\n  } else {\n    const made = $('Сделать ролик').first().json;\n    const videos = made.videos || [{ job_id: made.job_id, platforms: j.platforms || [] }];\n    for (const v of videos) {\n      for (const p of (v.platforms || [])) out.push({ json: { job_id: v.job_id, platform: p, mode: 'auto' } });\n    }\n  }\n}\nreturn out;"
       },
       "id": "a6",
       "name": "По платформам",
@@ -118,7 +118,7 @@
     },
     {
       "parameters": {
-        "content": "## VidAuto: ролик и публикация\n**Каждый день / вручную:** Сделать ролик → Куда постить (DEFAULT_PLATFORMS из настроек Студии, только подключённые) → Опубликовать\n**Кнопка «Publish» в Студии** (http://localhost:8000) → сразу Опубликовать на выбранные платформы\n\nВходы в YouTube / TikTok / Instagram / Facebook / Threads / X делаются в Студии: **Accounts**. Здесь ключи не нужны — загрузку делает worker, n8n решает когда и куда.\n\nОшибка на одной платформе не останавливает остальные: смотрите Executions.",
+        "content": "## VidAuto: ролик и публикация\n**Каждый день / вручную:** Сделать ролик (по одному на каждый канал с «Daily») → Куда постить (DEFAULT_PLATFORMS из настроек Студии, только подключённые) → Опубликовать\n**Кнопка «Publish» в Студии** (http://localhost:8000) → сразу Опубликовать на выбранные платформы\n\nВходы в YouTube / TikTok / Instagram / Facebook / Threads / X делаются в Студии: **Accounts**. Здесь ключи не нужны — загрузку делает worker, n8n решает когда и куда.\n\nОшибка на одной платформе не останавливает остальные: смотрите Executions.",
         "height": 300,
         "width": 520
       },

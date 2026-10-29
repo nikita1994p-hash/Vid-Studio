@@ -1,0 +1,280 @@
+"""Studio accounts: e-mail + password, sessions, the marketing-consent list.
+
+Stored in /data/users.json and /data/sessions.json. Passwords are scrypt hashes, session tokens are
+kept only as SHA-256 hashes. For the SaaS version swap this module's storage for a database;
+the functions keep their shape.
+"""
+import csv
+import hashlib
+import hmac
+import io
+import re
+import secrets
+import threading
+import os
+import time
+
+import space
+
+# Super admins see and control every account (SUPERADMIN_EMAILS in .env, comma separated). The first
+# account of a fresh Studio is its 'owner' with the same powers; everybody else is a 'user'.
+SUPERADMINS = {x.strip().lower() for x in os.environ.get("SUPERADMIN_EMAILS", "").split(",") if x.strip()}
+ADMIN_ROLES = ("superadmin", "owner")
+USERS = space.ROOT / "users.json"
+SESSIONS = space.ROOT / "sessions.json"
+SESSION_DAYS = 30
+MIN_PASSWORD = 8
+_lock = threading.Lock()
+_failures = {}   # e-mail -> (count, last attempt): slows down password guessing
+
+
+class AuthError(Exception):
+    pass
+
+
+def _now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _users():
+    users = space._read(USERS, []) or []
+    for u in users:   # an e-mail added to SUPERADMIN_EMAILS later is promoted on the next read
+        if u["email"] in SUPERADMINS:
+            u["role"] = "superadmin"
+    return users
+
+
+def is_admin(user):
+    return bool(user) and user.get("role") in ADMIN_ROLES
+
+
+def _save_users(users):
+    space._write(USERS, users)
+
+
+def _email(value):
+    email = (value or "").strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[a-z]{2,}", email):
+        raise AuthError("enter a valid e-mail")
+    return email[:200]
+
+
+def _hash(password, salt=None):
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+    return f"scrypt${salt.hex()}${digest.hex()}"
+
+
+def _matches(password, stored):
+    try:
+        _, salt, _digest = stored.split("$")
+    except ValueError:
+        return False
+    return hmac.compare_digest(_hash(password, bytes.fromhex(salt)), stored)
+
+
+def _check_password(password):
+    if len(password or "") < MIN_PASSWORD:
+        raise AuthError(f"the password needs at least {MIN_PASSWORD} characters")
+
+
+def public(user):
+    """What the browser may see about a user."""
+    return {k: user.get(k) for k in ("id", "email", "role", "marketing", "marketing_at", "created",
+                                      "last_login", "disabled")} | {"sessions": active_sessions(user["id"])}
+
+
+# ------------------------------------------------------------------ accounts
+
+def has_users():
+    return bool(_users())
+
+
+def register(email, password, marketing=False):
+    """A new account. The very first one is the owner and takes over the channels made before
+    accounts existed. marketing: the separate, optional 'news and offers' tick box."""
+    email = _email(email)
+    _check_password(password)
+    with _lock:
+        users = _users()
+        if any(u["email"] == email for u in users):
+            raise AuthError("this e-mail already has an account - sign in instead")
+        user = {"id": secrets.token_hex(8), "email": email, "password": _hash(password),
+                "role": "superadmin" if email in SUPERADMINS else "owner" if not users else "user",
+                "created": _now(), "last_login": None,
+                "marketing": bool(marketing), "marketing_at": _now() if marketing else None,
+                "disabled": False}
+        users.append(user)
+        _save_users(users)
+    if user["role"] in ADMIN_ROLES and len(users) == 1:
+        space.claim_unowned(user["id"])
+    return user
+
+
+def get(user_id):
+    return next((u for u in _users() if u["id"] == user_id), None)
+
+
+def authenticate(email, password):
+    email = (email or "").strip().lower()
+    count, last = _failures.get(email, (0, 0))
+    if count >= 5 and time.time() - last < 60 * min(count - 4, 15):
+        raise AuthError("too many wrong passwords - wait a few minutes")
+    user = next((u for u in _users() if u["email"] == email), None)
+    if not user or not _matches(password or "", user["password"]):
+        _failures[email] = (count + 1, time.time())
+        raise AuthError("wrong e-mail or password")
+    if user.get("disabled"):
+        raise AuthError("this account is blocked - ask the Studio admin")
+    _failures.pop(email, None)
+    _update(user["id"], last_login=_now())
+    return user
+
+
+def _update(user_id, **changes):
+    with _lock:
+        users = _users()
+        user = next((u for u in users if u["id"] == user_id), None)
+        if not user:
+            raise AuthError("no such user")
+        user.update(changes)
+        _save_users(users)
+        return user
+
+
+def change_password(user_id, old, new):
+    user = get(user_id)
+    if not user or not _matches(old or "", user["password"]):
+        raise AuthError("the current password is wrong")
+    _check_password(new)
+    _update(user_id, password=_hash(new))
+    end_sessions(user_id, keep=None)
+
+
+def set_password(user_id, new):
+    """The owner resets someone's password (until e-mail resets exist)."""
+    _check_password(new)
+    _update(user_id, password=_hash(new))
+    end_sessions(user_id)
+
+
+def set_marketing(user_id, on):
+    return _update(user_id, marketing=bool(on), marketing_at=_now() if on else None)
+
+
+def set_disabled(user_id, off):
+    user = get(user_id)
+    if user and user["role"] == "superadmin":
+        raise AuthError("a super admin cannot be blocked")
+    _update(user_id, disabled=bool(off))
+    if off:
+        end_sessions(user_id)
+
+
+def delete(user_id):
+    user = get(user_id)
+    if not user:
+        raise AuthError("no such user")
+    if user["role"] == "superadmin":
+        raise AuthError("a super admin cannot be deleted")
+    with _lock:
+        _save_users([u for u in _users() if u["id"] != user_id])
+    end_sessions(user_id)
+
+
+def can_manage(actor, target):
+    """Super admins manage everybody but other super admins; the owner manages plain users; nobody
+    blocks or deletes themselves here."""
+    if not actor or not target or actor["id"] == target["id"] or target["role"] == "superadmin":
+        return False
+    return actor["role"] == "superadmin" or (actor["role"] == "owner" and target["role"] == "user")
+
+
+def list_users(query=""):
+    """All accounts, newest first; query matches part of the e-mail or the id."""
+    q = (query or "").strip().lower()
+    found = [u for u in _users() if not q or q in u["email"] or q in u["id"]]
+    return [public(u) for u in sorted(found, key=lambda u: u.get("created") or "", reverse=True)]
+
+
+def marketing_csv():
+    """Only people who ticked 'news and offers', with the date they agreed."""
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["email", "consent_at", "signed_up"])
+    for u in _users():
+        if u.get("marketing") and not u.get("disabled"):
+            w.writerow([u["email"], u.get("marketing_at") or "", u.get("created") or ""])
+    return out.getvalue()
+
+
+# ------------------------------------------------------------------ sessions
+
+def _token_key(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _sessions():
+    data = space._read(SESSIONS, {}) or {}
+    now = time.time()
+    return {k: v for k, v in data.items() if v.get("expires", 0) > now}
+
+
+def start_session(user_id, channel=None):
+    token = secrets.token_urlsafe(32)
+    with _lock:
+        data = _sessions()
+        data[_token_key(token)] = {"user": user_id, "channel": channel,
+                                   "expires": time.time() + SESSION_DAYS * 86400}
+        space._write(SESSIONS, data)
+    return token
+
+
+def session(token):
+    """(user, session) for a cookie value, or (None, None)."""
+    if not token:
+        return None, None
+    s = _sessions().get(_token_key(token))
+    user = get(s["user"]) if s else None
+    if not user or user.get("disabled"):
+        return None, None
+    return user, s
+
+
+def set_session_channel(token, channel):
+    with _lock:
+        data = _sessions()
+        key = _token_key(token)
+        if key in data:
+            data[key]["channel"] = channel
+            space._write(SESSIONS, data)
+
+
+def end_session(token):
+    with _lock:
+        data = _sessions()
+        data.pop(_token_key(token or ""), None)
+        space._write(SESSIONS, data)
+
+
+def active_sessions(user_id):
+    return sum(1 for v in _sessions().values() if v["user"] == user_id)
+
+
+def end_sessions(user_id, keep=None):
+    with _lock:
+        data = {k: v for k, v in _sessions().items() if v["user"] != user_id or k == keep}
+        space._write(SESSIONS, data)
+
+
+# ------------------------------------------------------------------ channels a user may open
+
+def channels_of(user):
+    return [c for c in space.all_channels() if c.get("owner") == user["id"]]
+
+
+def may_open(user, cid):
+    try:
+        return space.get(cid).get("owner") == user["id"]
+    except space.SpaceError:
+        return False

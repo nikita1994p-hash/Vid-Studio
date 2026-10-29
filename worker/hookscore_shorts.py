@@ -10,6 +10,10 @@ the weakest one), with five changes for this format:
 - the weakest property weighs 30%, not 40%, so one structurally absent property (a statistic hook
   has no 'you') caps a hook at WORKABLE instead of sinking it.
 Like the original it is a lint, not a prediction: a low score is a reason to look again.
+
+kind='health' (NICHE_KIND) swaps money for the body: a figure with a unit (minutes, reps, hours of
+sleep, steps) counts as specific, and the stake is what the viewer gains or loses - pain, strength,
+sleep, energy, years.
 """
 import json
 import os
@@ -78,6 +82,14 @@ LOSS = re.compile(r"\b(lose|loses|lost|losing|waste|wasting|wasted|costs?|risk|r
 GAP = re.compile(r"\b(why|how|what|which|but|until|nobody|except|instead|without|only|catch|most people|"
                  r"nobody tells|here's|here is)\b", re.I)
 CLOSED = re.compile(r"\b(because|so that|which means)\b", re.I)
+UNIT = re.compile(r"\b\d[\d,.]*\s?(%|minutes?|mins?|seconds?|hours?|days?|weeks?|reps?|sets?|steps?|"
+                  r"grams?|calories|pounds?|kg|glasses|times|years?)\b", re.I)
+BODY_RATE = re.compile(r"\b\d[\d,.]*\s?(minutes?|reps?|sets?|steps?|hours?|glasses|times|grams?)\s*(a|per|each|every)\s+"
+                       r"(day|week|night|morning|session|meal|hour)\b", re.I)
+BODY_WIN = re.compile(r"\b(stronger|faster|burns?|build|builds|lose|loses|fat|muscle|strength|energy|sleep|"
+                      r"younger|longer|fixes|relieves?|heals?|flexib\w*|posture|heart|lungs|focus|mood)\b", re.I)
+BODY_LOSS = re.compile(r"\b(pain|hurts?|injur\w*|ruin\w*|damage\w*|mistake|wrong|stop|never|risk|worse|aging|"
+                       r"belly|stiff|weak|tired|exhausted|wasting|before|dangerous)\b", re.I)
 YOU = re.compile(r"\b(you|your|you're|yourself)\b", re.I)
 WEAK_OPEN = re.compile(r"^(so|hey|hi|today|in this video|welcome|let's talk|let me)\b", re.I)
 
@@ -90,29 +102,33 @@ def _topic_words(topic):
     return {w for w in re.findall(r"[a-z]+", (topic or "").lower()) if w not in STOP and len(w) > 2}
 
 
-def specificity(t, topic_words):
+def specificity(t, topic_words, kind="business"):
     w = _words(t)
     if not w:
         return 0
     nums = len(NUMBER.findall(t))
-    s = 30 + 25 * min(nums, 2) + (10 if MONEY.search(t) else 0)
+    s = 30 + 25 * min(nums, 2) + (10 if (UNIT if kind == "health" else MONEY).search(t) else 0)
     s += 10 if topic_words & set(re.findall(r"[a-z]+", t.lower())) else 0
     s -= 15 * sum(x in VAGUE for x in w) + 5 * sum(x in FILLER for x in w)
     return max(0, min(100, s))
 
 
-def stakes(t, topic_words=None):
+def stakes(t, topic_words=None, kind="business"):
+    if kind == "health":
+        hits = len(BODY_WIN.findall(t)) + len(BODY_LOSS.findall(t))
+        return max(0, min(100, 25 + 25 * min(hits, 3) + (15 if BODY_RATE.search(t) else 0)
+                          + (10 if UNIT.search(t) else 0)))
     hits = len(WIN.findall(t)) + len(LOSS.findall(t))
     return max(0, min(100, 25 + 25 * min(hits, 3) + (15 if RATE.search(t) else 0) + (10 if MONEY.search(t) else 0)))
 
 
-def curiosity(t, topic_words=None):
+def curiosity(t, topic_words=None, kind=None):
     n = len(GAP.findall(t))
     s = 25 + 18 * min(n, 3) + (15 if t.strip().endswith("?") else 0) - (25 if CLOSED.search(t) else 0)
     return max(0, min(100, s))
 
 
-def front(t, topic_words):
+def front(t, topic_words, kind=None):
     first = " ".join(t.split()[:5])
     if WEAK_OPEN.search(t.strip()):
         return 10
@@ -124,7 +140,7 @@ def front(t, topic_words):
     return max(0, min(100, s))
 
 
-def brevity(t, topic_words=None):
+def brevity(t, topic_words=None, kind=None):
     n = len(t.split())
     if n == 0:
         return 0
@@ -153,6 +169,26 @@ DESCRIBE = {
 }
 
 
+FIX_HEALTH = {**FIX,
+              "SPECIFICITY": "put a concrete figure from the body in it (minutes, reps, hours, steps) and name the "
+                             "exercise or habit",
+              "STAKES": "say what the viewer gains or loses: pain, strength, sleep, energy - and how fast",
+              "FRONT": "make the first five words carry it: the number, the exercise or habit, or 'you'"}
+DESCRIBE_HEALTH = {**DESCRIBE,
+                   "SPECIFICITY": "a concrete figure with a unit (minutes, reps, hours, steps) and the topic named",
+                   "STAKES": "what the body gains or loses: pain, strength, sleep, energy, injury, mistake, never",
+                   "FRONT": "the first five words hold a number, the exercise or habit, or 'you'; no 'So / Hey / "
+                            "Today' opener"}
+
+
+def fix(kind="business"):
+    return FIX_HEALTH if kind == "health" else FIX
+
+
+def describe(kind="business"):
+    return DESCRIBE_HEALTH if kind == "health" else DESCRIBE
+
+
 def _formulas():
     path = Path(os.environ.get("SKILLS_MOUNT", "/skills")) / "yt-script" / "hooks.json"
     try:
@@ -165,10 +201,10 @@ def band(v):
     return "STRONG" if v >= 70 else "WORKABLE" if v >= 55 else "WEAK"
 
 
-def score(text, topic=""):
+def score(text, topic="", kind="business"):
     t = digits(text.replace("\n", " ").strip())
     tw = _topic_words(topic)
-    parts = {name: fn(t, tw) for name, fn in PROPS}
+    parts = {name: fn(t, tw, kind) for name, fn in PROPS}
     vals = list(parts.values())
     verdict = round(0.7 * sum(vals) / len(vals) + 0.3 * min(vals))
     best, hits = "Unclassified", 0

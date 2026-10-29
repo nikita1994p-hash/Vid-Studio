@@ -1,10 +1,12 @@
 """HTTP face of the pipeline.
 
+/login       sign in / sign up (static/login.html); everything else needs a session cookie
 /            the Studio-style dashboard (static/)
-/api/...     what the dashboard calls
-/produce, /jobs/<id>/publish-data, /jobs/<id>/uploaded   what n8n calls
-/files/<job>/<name>                                      artifacts (video, images, voice)
+/api/...     what the dashboard calls - always inside the signed-in user's open channel
+/produce, /social/..., /jobs/<id>/...   what n8n calls (channel taken from the video, or every channel)
+/files/<job>/<name>                     artifacts (video, images, voice)
 """
+import hmac
 import json
 import threading
 import traceback
@@ -13,37 +15,47 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import abtest
+import auth
 import earnings
+import niches
 import notify
 import pipeline
 import social
+import space
 import topics
 
-app = FastAPI(title="VidAuto worker")
+app = FastAPI(title="Vid Studio worker")
 _busy = threading.Lock()
-pipeline.recover_interrupted()
+COOKIE = "vs_session"
+space.migrate()
+for _cid in space.list_ids():
+    with space.use(_cid):
+        pipeline.recover_interrupted()
 
 
 def _stats_loop():
     """Fetch the numbers every 6 hours even when nobody opens the Studio, so money and A/B alerts
-    reach Telegram on time."""
+    reach Telegram on time - for every channel."""
     import time
     while True:
         time.sleep(900)
-        try:
-            if earnings.stale(6):
-                earnings.refresh()
-        except Exception as e:
-            print(f"[warn] background stats refresh: {e}", flush=True)
+        for cid in space.list_ids():
+            try:
+                with space.use(cid):
+                    if earnings.stale(6):
+                        earnings.refresh()
+            except Exception as e:
+                print(f"[warn] background stats refresh ({cid}): {e}", flush=True)
 
 
 threading.Thread(target=_stats_loop, daemon=True).start()
+threading.Thread(target=notify.poll_loop, daemon=True).start()   # Telegram button presses
 STATIC = Path(__file__).parent / "static"
 MEDIA = {".mp4": "video/mp4", ".png": "image/png", ".jpg": "image/jpeg", ".wav": "audio/wav",
          ".mp3": "audio/mpeg", ".json": "application/json", ".ass": "text/plain", ".txt": "text/plain"}
@@ -142,11 +154,288 @@ class MetaRequest(BaseModel):
     tags: str | None = None
 
 
+class SignUpRequest(BaseModel):
+    email: str
+    password: str
+    marketing: bool = False             # the separate 'news and offers' tick box, off by default
+
+
+class SignInRequest(BaseModel):
+    email: str
+    password: str
+
+
+class PasswordRequest(BaseModel):
+    old: str = ""
+    new: str
+
+
+class MarketingRequest(BaseModel):
+    marketing: bool
+
+
+class ChannelRequest(BaseModel):
+    name: str
+    template: str = "business"
+
+
+class ChannelEditRequest(BaseModel):
+    name: str | None = None
+    daily: bool | None = None
+
+
+class UserEditRequest(BaseModel):
+    disabled: bool | None = None
+    password: str | None = None         # the owner sets a new password
+
+
 def _fail(e):
+    if isinstance(e, (auth.AuthError, space.SpaceError)):
+        raise HTTPException(409 if "create a channel" in str(e) else 400, str(e))
     if isinstance(e, pipeline.PipelineError):
         raise HTTPException(400 if "bad job id" in str(e) or "no such" in str(e) else 500, str(e))
     traceback.print_exc()
     raise HTTPException(500, f"{type(e).__name__}: {e}")
+
+
+@app.exception_handler(space.SpaceError)
+def _no_channel(request, e):
+    return JSONResponse({"detail": str(e)}, status_code=409)
+
+
+# ------------------------------------------------------------------ sessions and channels
+
+OPEN = ("/login", "/static/", "/api/auth/", "/health")
+INTERNAL = ("/produce", "/social/", "/jobs/")   # n8n inside Docker; no browser, no cookie
+
+
+def _job_in(path):
+    parts = path.strip("/").split("/")
+    if len(parts) >= 3 and parts[:2] == ["api", "jobs"]:
+        return parts[2]
+    if len(parts) >= 2 and parts[0] in ("files", "jobs"):
+        return parts[1]
+    return None
+
+
+@app.middleware("http")
+async def studio_session(request, call_next):
+    """Who is asking and in which channel. A browser needs a session; the page or API call then runs
+    inside the user's open channel - or the channel of the video in the URL, if it is theirs."""
+    path = request.url.path
+    if path.startswith(OPEN) or (path.startswith("/oauth/") and path.endswith("/callback")):
+        return await call_next(request)
+    if path.startswith(INTERNAL):
+        token = pipeline.env("INTERNAL_TOKEN")   # set it once the Studio is on a server
+        if token and not hmac.compare_digest(request.headers.get("x-internal-token", ""), token):
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        cid = space.find_job(_job_in(path))
+        if cid:
+            space.set_current(cid)
+        return await call_next(request)
+    user, sess = auth.session(request.cookies.get(COOKIE))
+    if not user:
+        if path == "/":
+            return RedirectResponse("/login")
+        return JSONResponse({"detail": "sign in first"}, status_code=401)
+    request.state.user = user
+    job_cid = space.find_job(_job_in(path))
+    if job_cid and not auth.may_open(user, job_cid):
+        return JSONResponse({"detail": "no such video"}, status_code=404)
+    own = [c["id"] for c in auth.channels_of(user)]
+    cid = job_cid or (sess.get("channel") if sess.get("channel") in own else own[0] if own else space.NONE)
+    space.set_current(cid)
+    return await call_next(request)
+
+
+def _user(request):
+    return request.state.user
+
+
+def _owner(request):
+    if not auth.is_admin(_user(request)):
+        raise HTTPException(403, "only the Studio owner or a super admin can do this")
+    return _user(request)
+
+
+def _managed(request, user_id):
+    """The admin, if they may change this account (not themselves, not another super admin)."""
+    admin = _owner(request)
+    if not auth.can_manage(admin, auth.get(user_id)):
+        raise HTTPException(403, "you cannot change this account")
+    return admin
+
+
+def _sign_in(response, user, channel=None):
+    own = [c["id"] for c in auth.channels_of(user)]
+    token = auth.start_session(user["id"], channel or (own[0] if own else None))
+    response.set_cookie(COOKIE, token, max_age=auth.SESSION_DAYS * 86400, httponly=True, samesite="lax",
+                        secure=pipeline.env("PUBLIC_BASE_URL", "").startswith("https://"))
+
+
+@app.get("/login")
+def login_page():
+    return HTMLResponse((STATIC / "login.html").read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/auth/state")
+def auth_state(request: Request):
+    user, _ = auth.session(request.cookies.get(COOKIE))
+    return {"signed_in": bool(user), "first_account": not auth.has_users()}
+
+
+@app.post("/api/auth/register")
+def register(req: SignUpRequest, response: Response):
+    try:
+        user = auth.register(req.email, req.password, req.marketing)
+    except Exception as e:
+        _fail(e)
+    _sign_in(response, user)
+    return {"user": auth.public(user)}
+
+
+@app.post("/api/auth/login")
+def login(req: SignInRequest, response: Response):
+    try:
+        user = auth.authenticate(req.email, req.password)
+    except Exception as e:
+        _fail(e)
+    _sign_in(response, user)
+    return {"user": auth.public(user)}
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request, response: Response):
+    auth.end_session(request.cookies.get(COOKIE))
+    response.delete_cookie(COOKIE)
+    return {"signed_out": True}
+
+
+@app.get("/api/me")
+def me(request: Request):
+    user = _user(request)
+    try:
+        current = space.current()
+    except space.SpaceError:
+        current = None
+    return {"user": auth.public(user), "channels": auth.channels_of(user), "channel": current,
+            "templates": {k: v["label"] for k, v in niches.TEMPLATES.items()}}
+
+
+@app.put("/api/me/password")
+def change_password(req: PasswordRequest, request: Request, response: Response):
+    try:
+        auth.change_password(_user(request)["id"], req.old, req.new)
+    except Exception as e:
+        _fail(e)
+    _sign_in(response, _user(request), space.current() if space.list_ids() else None)
+    return {"changed": True}
+
+
+@app.put("/api/me/marketing")
+def change_marketing(req: MarketingRequest, request: Request):
+    return auth.public(auth.set_marketing(_user(request)["id"], req.marketing))
+
+
+@app.post("/api/channels")
+def create_channel(req: ChannelRequest, request: Request):
+    """A new channel from a template: its settings, script rules and starter topics."""
+    tpl = niches.template(req.template)
+    try:
+        meta = space.create(req.name, _user(request)["id"], req.template, tpl["settings"])
+        with space.use(meta["id"]):
+            if tpl["rules"]:
+                pipeline.save_script_rules(tpl["rules"])
+            topics.load_starter()
+    except Exception as e:
+        _fail(e)
+    auth.set_session_channel(request.cookies.get(COOKIE), meta["id"])
+    return meta
+
+
+def _mine(request, cid):
+    if not auth.may_open(_user(request), cid):
+        raise HTTPException(404, "no such channel")
+
+
+@app.post("/api/channels/{cid}/open")
+def open_channel(cid: str, request: Request):
+    _mine(request, cid)
+    auth.set_session_channel(request.cookies.get(COOKIE), cid)
+    return space.get(cid)
+
+
+@app.patch("/api/channels/{cid}")
+def edit_channel(cid: str, req: ChannelEditRequest, request: Request):
+    _mine(request, cid)
+    try:
+        return space.update(cid, **{k: v for k, v in req.model_dump().items() if v is not None})
+    except Exception as e:
+        _fail(e)
+
+
+@app.delete("/api/channels/{cid}")
+def delete_channel(cid: str, request: Request, confirm: str = ""):
+    """Deletes every video, setting and login of the channel: the name must be typed to confirm."""
+    _mine(request, cid)
+    if confirm.strip() != space.get(cid)["name"]:
+        raise HTTPException(400, "type the channel name to confirm")
+    space.delete(cid)
+    return {"deleted": cid}
+
+
+@app.get("/api/users")
+def users(request: Request, q: str = ""):
+    """Every account (q: part of an e-mail or id) with its channel names and what this admin may do."""
+    admin = _owner(request)
+    names = {}
+    for c in space.all_channels():
+        names.setdefault(c.get("owner"), []).append(c["name"])
+    full = {u["id"]: u for u in auth._users()}
+    return [{**u, "channels": names.get(u["id"], []), "manageable": auth.can_manage(admin, full[u["id"]])}
+            for u in auth.list_users(q)]
+
+
+@app.patch("/api/users/{user_id}")
+def edit_user(user_id: str, req: UserEditRequest, request: Request):
+    _managed(request, user_id)
+    try:
+        if req.disabled is not None:
+            auth.set_disabled(user_id, req.disabled)
+        if req.password:
+            auth.set_password(user_id, req.password)
+    except Exception as e:
+        _fail(e)
+    return auth.public(auth.get(user_id))
+
+
+@app.post("/api/users/{user_id}/logout")
+def logout_user(user_id: str, request: Request):
+    """Sign the user out of the Studio on every device."""
+    _managed(request, user_id)
+    auth.end_sessions(user_id)
+    return {"signed_out": user_id}
+
+
+@app.delete("/api/users/{user_id}")
+def delete_user(user_id: str, request: Request):
+    """The account goes; its channels stay on disk and move to the admin who deleted it."""
+    owner = _managed(request, user_id)
+    try:
+        auth.delete(user_id)
+    except Exception as e:
+        _fail(e)
+    for c in space.all_channels():
+        if c.get("owner") == user_id:
+            space.update(c["id"], owner=owner["id"])
+    return {"deleted": user_id}
+
+
+@app.get("/api/users/marketing.csv")
+def marketing_list(request: Request):
+    _owner(request)
+    return Response(auth.marketing_csv(), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=vid-studio-subscribers.csv"})
 
 
 # ------------------------------------------------------------------ dashboard
@@ -176,6 +465,11 @@ async def revalidate_dashboard(request, call_next):
 
 
 @app.get("/health")
+def alive():
+    """Docker's health check: no session, so nothing about any channel."""
+    return {"ok": True, "busy": _busy.locked()}
+
+
 @app.get("/api/health")
 def health():
     return {**pipeline.health(), "busy": _busy.locked()}
@@ -235,7 +529,7 @@ def start_job(req: ProduceRequest | None = None):
         finally:
             _busy.release()
 
-    threading.Thread(target=run, daemon=True).start()
+    space.thread(run)
     return {"job_id": job_id}
 
 
@@ -291,7 +585,7 @@ def rerender(job_id: str):
         finally:
             _busy.release()
 
-    threading.Thread(target=run, daemon=True).start()
+    space.thread(run)
     return {"rerendering": job_id}
 
 
@@ -314,7 +608,7 @@ def variants(job_id: str, req: VariantsRequest):
         finally:
             _busy.release()
 
-    threading.Thread(target=run, daemon=True).start()
+    space.thread(run)
     return {"making": max(0, min(4, req.count))}
 
 
@@ -343,7 +637,7 @@ def publish(job_id: str, req: PublishRequest):
                     traceback.print_exc()  # recorded in the video's status
 
         social.mark_queued(job_id, platforms, req.mode)
-        threading.Thread(target=run, daemon=True).start()
+        space.thread(run)
         return {"queued": job_id, "platforms": platforms, "via": "worker"}
     url = pipeline.env("N8N_PUBLISH_WEBHOOK", "http://n8n:5678/webhook/vidauto-publish")
     body = json.dumps({"job_id": job_id, "mode": req.mode, "platforms": platforms}).encode()
@@ -610,23 +904,41 @@ def oauth_callback(platform: str, code: str = "", state: str = "", error: str = 
 
 @app.post("/produce")
 def produce(req: ProduceRequest | None = None):
+    """n8n's daily run: one video for every channel with 'Daily' on, one after another.
+    Returns {videos: [{job_id, channel, platforms}]} - the platforms each channel posts to."""
     req = req or ProduceRequest()
     if not _busy.acquire(blocking=False):
         raise HTTPException(409, "another video is being produced right now")
+    videos, errors = [], []
     try:
-        return pipeline.produce(topic=(req.topic or "").strip() or None,
-                                mock=req.mock, use_video_hook=req.use_video_hook)
-    except Exception as e:
-        _fail(e)
+        for meta in space.all_channels():
+            if not meta.get("daily", True):
+                continue
+            try:
+                with space.use(meta["id"]):
+                    result = pipeline.produce(topic=(req.topic or "").strip() or None,
+                                              mock=req.mock, use_video_hook=req.use_video_hook)
+                    videos.append({"job_id": result["job_id"], "channel": meta["id"],
+                                   "platforms": social.default_platforms()})
+            except Exception as e:  # one channel's failure must not cost the others their video
+                traceback.print_exc()
+                errors.append(f"{meta['name']}: {str(e)[:200]}")
     finally:
         _busy.release()
+    if not videos and errors:
+        raise HTTPException(500, " | ".join(errors))
+    return {"videos": videos, "errors": errors, "job_id": videos[0]["job_id"] if videos else None}
 
 
 @app.post("/social/{platform}/post")
 def social_post(platform: str, req: SocialPostRequest):
     """n8n: upload one finished video to one platform (takes a while; n8n waits)."""
+    cid = space.find_job(req.job_id)
+    if not cid:
+        raise HTTPException(404, "no such video")
     try:
-        return social.post(platform, req.job_id, req.mode)
+        with space.use(cid):
+            return social.post(platform, req.job_id, req.mode)
     except Exception as e:
         _fail(e)
 

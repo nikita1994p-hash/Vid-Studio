@@ -4,17 +4,18 @@ The bot token and chat id live in data/accounts/telegram.json (never in settings
 to the browser). Which events are sent is chosen in Settings -> Notifications. Sending never blocks
 or breaks the pipeline: it runs in a background thread and only logs a short warning on failure.
 """
+import hashlib
 import json
-import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 
 import pipeline
+import space
 from pipeline import DATA, PipelineError
 
-CONFIG = DATA / "accounts" / "telegram.json"
-STATE = DATA / "notify_state.json"     # which one-per-day alerts were already sent
+CONFIG = space.Here("accounts/telegram.json")
+STATE = space.Here("notify_state.json")     # which one-per-day alerts were already sent
 API = "https://api.telegram.org/bot{token}/{method}"
 EVENTS = {"done": "NOTIFY_DONE", "error": "NOTIFY_ERRORS", "limit": "NOTIFY_LIMITS",
           "money": "NOTIFY_MONEY", "ab": "NOTIFY_AB", "posted": "NOTIFY_POSTED"}
@@ -69,6 +70,8 @@ def find_chat():
         raise PipelineError("save the bot token first")
     updates = _call(c["bot_token"], "getUpdates", {"limit": 20, "timeout": 0})
     chats = [u.get("message", {}).get("chat") for u in updates if u.get("message")]
+    if not chats and _last_chat.get(c["bot_token"]):   # another channel's poller read it first
+        chats = [_last_chat[c["bot_token"]]]
     if not chats:
         raise PipelineError(f"no message yet: open {c.get('bot_name', 'your bot')} in Telegram, press Start, then try again")
     chat = chats[-1]
@@ -82,10 +85,13 @@ def forget():
     return status()
 
 
-def _send_now(text):
+def _send_now(text, buttons=None):
     c = _config()
-    _call(c["bot_token"], "sendMessage", {"chat_id": c["chat_id"], "text": text[:4000],
-                                          "disable_web_page_preview": "true"})
+    params = {"chat_id": c["chat_id"], "text": text[:4000], "disable_web_page_preview": "true"}
+    if buttons:
+        params["reply_markup"] = json.dumps({"inline_keyboard": [
+            [{"text": label, "callback_data": data[:64]} for label, data in row] for row in buttons]})
+    _call(c["bot_token"], "sendMessage", params)
 
 
 def test():
@@ -100,18 +106,19 @@ def link(job_id):
     return f"{base.rstrip('/')}/#/video/{job_id}"
 
 
-def send(event, text):
-    """Fire and forget: returns at once; a Telegram problem never touches the video."""
+def send(event, text, buttons=None):
+    """Fire and forget: returns at once; a Telegram problem never touches the video.
+    buttons: rows of (label, callback data) shown under the message; presses arrive in poll_loop()."""
     if not status()["configured"] or (event in EVENTS and not pipeline.flag(EVENTS[event], "true")):
         return False
 
     def run():
         try:
-            _send_now(text)
+            _send_now(text, buttons)
         except Exception as e:
             print(f"[warn] telegram alert not sent: {e}", flush=True)
 
-    threading.Thread(target=run, daemon=True).start()
+    space.thread(run)   # keeps this channel's bot and chat
     return True
 
 
@@ -124,3 +131,78 @@ def once(key, event, text):
     state[key] = today
     pipeline._write_json(STATE, state)
     return send(event, text)
+
+
+# ------------------------------------------------------------------ buttons
+
+_last_chat = {}   # bot token -> the chat of the last plain message the poller saw (for find_chat)
+
+
+def _bots():
+    """bot token -> the channels using it (several channels may share one bot)."""
+    bots = {}
+    for cid in space.list_ids():
+        with space.use(cid):
+            c = _config()
+        if c.get("bot_token") and c.get("chat_id"):
+            bots.setdefault(c["bot_token"], []).append((cid, str(c["chat_id"])))
+    return bots
+
+
+def _press(token, channels, cq):
+    """One button press: 'pub|<job>' makes the private upload public, 'del|<job>' deletes it.
+    Only the chat the alert went to may press it."""
+    import social
+    action, _, job_id = (cq.get("data") or "").partition("|")
+    chat = str((cq.get("message") or {}).get("chat", {}).get("id", ""))
+    cid = space.find_job(job_id)
+    if not cid or (cid, chat) not in channels:
+        _call(token, "answerCallbackQuery", {"callback_query_id": cq["id"], "text": "Not allowed here"})
+        return
+    with space.use(cid):
+        try:
+            if action == "pub":
+                done = "🌍 Published: " + social.youtube_make_public(job_id)
+            elif action == "del":
+                social.youtube_delete(job_id)
+                done = "🗑 Deleted from YouTube (the video stays in the Studio)"
+            else:
+                return
+        except Exception as e:
+            _call(token, "answerCallbackQuery", {"callback_query_id": cq["id"], "text": str(e)[:190],
+                                                 "show_alert": "true"})
+            return
+    _call(token, "answerCallbackQuery", {"callback_query_id": cq["id"], "text": "Done"})
+    msg = cq.get("message") or {}
+    _call(token, "editMessageText", {"chat_id": chat, "message_id": msg.get("message_id"),
+                                     "text": (msg.get("text") or "")[:3800] + "\n\n" + done,
+                                     "disable_web_page_preview": "true"})
+
+
+def poll_loop(pause=4):
+    """Background thread: read button presses for every channel's bot. Offsets live in
+    /data/telegram_offsets.json, so a restart does not replay old presses."""
+    import time
+    path = DATA / "telegram_offsets.json"
+    while True:
+        offsets = pipeline._read_json(path, {}) or {}
+        changed = False
+        for token, channels in _bots().items():
+            key = hashlib.sha256(token.encode()).hexdigest()[:16]
+            try:
+                updates = _call(token, "getUpdates", {"offset": offsets.get(key, 0), "timeout": 0, "limit": 50})
+            except Exception as e:
+                print(f"[warn] telegram poll: {e}", flush=True)
+                continue
+            for u in updates:
+                offsets[key], changed = u["update_id"] + 1, True
+                if u.get("message"):
+                    _last_chat[token] = u["message"].get("chat")
+                if u.get("callback_query"):
+                    try:
+                        _press(token, channels, u["callback_query"])
+                    except Exception as e:
+                        print(f"[warn] telegram button: {e}", flush=True)
+        if changed:
+            pipeline._write_json(path, offsets)
+        time.sleep(pause)

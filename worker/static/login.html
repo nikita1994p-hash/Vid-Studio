@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · Vid Studio</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23ff0033'/%3E%3Cpath d='M9 7l8 5-8 5z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="auth-page">
+  <main class="auth-card">
+    <div class="brand auth-brand"><span class="logo">▶</span><span>Vid</span><span class="brand-sub">Studio</span></div>
+    <div class="tabs auth-tabs">
+      <button class="tab active" data-mode="login" type="button">Sign in</button>
+      <button class="tab" data-mode="register" type="button">Create account</button>
+    </div>
+    <p class="muted" id="first-hint" hidden>No accounts yet: the first one you create owns this Studio and
+      takes over the channel that is already here.</p>
+    <form id="auth-form">
+      <label>E-mail<input name="email" type="email" autocomplete="email" required maxlength="200"></label>
+      <label>Password <span class="muted" id="pw-hint" hidden>(at least 8 characters)</span>
+        <input name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="200">
+      </label>
+      <div id="register-only" hidden>
+        <label class="check"><input type="checkbox" name="marketing">
+          Send me news, tips and offers about Vid Studio by e-mail (optional, unsubscribe any time)</label>
+        <p class="muted small">By creating an account you agree to the
+          <a href="https://nikita1994p-hash.github.io/Vid-Studio/terms.html" target="_blank" rel="noopener">Terms</a> and the
+          <a href="https://nikita1994p-hash.github.io/Vid-Studio/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+      </div>
+      <div class="error-box" id="auth-error" hidden></div>
+      <button class="btn btn-primary auth-submit" id="auth-submit">Sign in</button>
+    </form>
+  </main>
+  <script>
+    const form = document.getElementById("auth-form");
+    let mode = "login";
+
+    function setMode(m) {
+      mode = m;
+      document.querySelectorAll(".auth-tabs .tab").forEach((b) => b.classList.toggle("active", b.dataset.mode === m));
+      document.getElementById("register-only").hidden = m !== "register";
+      document.getElementById("pw-hint").hidden = m !== "register";
+      document.getElementById("auth-submit").textContent = m === "register" ? "Create account" : "Sign in";
+      form.password.autocomplete = m === "register" ? "new-password" : "current-password";
+      document.getElementById("auth-error").hidden = true;
+    }
+
+    document.querySelectorAll(".auth-tabs .tab").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+    fetch("/api/auth/state").then((r) => r.json()).then((s) => {
+      if (s.signed_in) location.href = "/";
+      if (s.first_account) { document.getElementById("first-hint").hidden = false; setMode("register"); }
+    }).catch(() => {});
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const body = { email: form.email.value, password: form.password.value };
+      if (mode === "register") body.marketing = form.marketing.checked;
+      const box = document.getElementById("auth-error");
+      box.hidden = true;
+      try {
+        const res = await fetch(`/api/auth/${mode}`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Check the e-mail and password");
+        location.href = "/";
+      } catch (err) {
+        box.textContent = err.message;
+        box.hidden = false;
+      }
+    });
+  </script>
+</body>
+</html>

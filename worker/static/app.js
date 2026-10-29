@@ -25,7 +25,11 @@ async function api(path, opts = {}) {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  if (!res.ok) throw new Error((data && data.detail) || `${res.status} ${res.statusText}`);
+  if (res.status === 401) { location.href = "/login"; throw new Error("sign in first"); }
+  if (res.status === 409 && data && data.detail === "create a channel first" && !location.hash.startsWith("#/channels")) {
+    location.hash = "#/channels";
+  }
+  if (!res.ok) throw new Error((data && typeof data.detail === "string" && data.detail) || `${res.status} ${res.statusText}`);
   return data;
 }
 
@@ -1106,11 +1110,239 @@ async function route() {
     else if (page === "earnings") await renderEarnings();
     else if (page === "topics") await renderTopics();
     else if (page === "ab") await renderAB();
+    else if (page === "channels") await renderChannels();
+    else if (page === "account") await renderAccount();
+    else if (page === "users") await renderUsers();
+    else if (me && !me.channel) { location.hash = "#/channels"; return; }
     else await renderDashboard();
   } catch (e) {
     view.innerHTML = `<div class="error-box">Cannot load: ${esc(e.message)}<br>Is the worker container running? (docker compose ps)</div>`;
     poll(route, 5000);
   }
+}
+
+// ------------------------------------------------------------------ accounts and channels
+
+let me = null;
+
+async function loadMe() {
+  me = await api("/api/me");
+  const pick = $("#channel-pick");
+  pick.innerHTML = me.channels.length
+    ? me.channels.map((c) => `<option value="${esc(c.id)}" ${c.id === me.channel ? "selected" : ""}>${esc(c.name)}</option>`).join("")
+    : `<option value="">No channel yet</option>`;
+  $("#user-email").textContent = me.user.email;
+  $("#user-btn").textContent = (me.user.email[0] || "●").toUpperCase();
+  $("#users-link").hidden = !isAdmin(me.user);
+  $("#nav-users").hidden = !isAdmin(me.user);
+}
+
+$("#channel-pick").addEventListener("change", async (e) => {
+  if (!e.target.value) return;
+  try {
+    await api(`/api/channels/${encodeURIComponent(e.target.value)}/open`, { method: "POST" });
+    await loadMe();
+    loadHealth();
+    if (location.hash.startsWith("#/video")) location.hash = "#/content";
+    else route();
+  } catch (err) { toast(err.message, true); }
+});
+
+async function renderChannels() {
+  await loadMe();
+  const tpl = Object.entries(me.templates).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("");
+  view.innerHTML = `
+    <h1>Channels</h1>
+    <p class="muted">Each channel has its own YouTube and Telegram logins, settings, topics, videos and earnings.
+      The AI keys, the music and the daily FLUX picture limit are shared.</p>
+    ${me.channels.length ? "" : `<div class="ok-box">Create your first channel to start.</div>`}
+    <div class="card"><h2>New channel</h2>
+      <form id="channel-form" class="actions channel-form">
+        <input name="name" placeholder="Channel name, e.g. Daily Fit Habits" maxlength="60" required>
+        <select name="template">${tpl}</select>
+        <button class="btn btn-primary">Create</button>
+      </form>
+      <p class="muted small">The template fills the niche, series, voice, script rules and a starter list of topics.
+        Everything can be changed later in Settings and Topics.</p>
+    </div>
+    ${me.channels.map((c) => `
+      <div class="card channel-card" data-id="${esc(c.id)}">
+        <div class="actions">
+          <input class="ch-name" value="${esc(c.name)}" maxlength="60">
+          <button class="btn btn-outline" data-ch="rename">Rename</button>
+          ${c.id === me.channel ? `<span class="chip done">open</span>` : `<button class="btn btn-outline" data-ch="open">Open</button>`}
+        </div>
+        <label class="check"><input type="checkbox" data-ch="daily" ${c.daily !== false ? "checked" : ""}>
+          Make a video every day at 9:00 (n8n daily run)</label>
+        <p class="muted small">Template: ${esc(me.templates[c.template] || c.template || "—")} · created ${esc(when(c.created))}</p>
+        <details><summary class="muted">Delete this channel…</summary>
+          <p class="muted small">Deletes all its videos, topics, settings, logins and earnings from this computer.
+            Type the channel name to confirm.</p>
+          <div class="actions"><input class="ch-confirm" placeholder="${esc(c.name)}">
+            <button class="btn btn-danger" data-ch="delete">Delete channel</button></div>
+        </details>
+      </div>`).join("")}`;
+
+  $("#channel-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const btn = f.querySelector("button");
+    btn.disabled = true;
+    try {
+      const c = await api("/api/channels", { method: "POST", body: JSON.stringify({ name: f.name.value, template: f.template.value }) });
+      toast(`Channel “${c.name}” created`);
+      await loadMe();
+      loadHealth();
+      location.hash = "#/topics";
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
+  });
+
+  view.querySelectorAll(".channel-card").forEach((card) => {
+    const id = card.dataset.id;
+    const url = `/api/channels/${encodeURIComponent(id)}`;
+    card.addEventListener("click", async (e) => {
+      const act = e.target.dataset.ch;
+      try {
+        if (act === "rename") {
+          await api(url, { method: "PATCH", body: JSON.stringify({ name: card.querySelector(".ch-name").value }) });
+          toast("Renamed");
+        } else if (act === "open") {
+          await api(`${url}/open`, { method: "POST" });
+          location.hash = "#/";
+        } else if (act === "delete") {
+          const confirm = card.querySelector(".ch-confirm").value;
+          await api(`${url}?confirm=${encodeURIComponent(confirm)}`, { method: "DELETE" });
+          toast("Channel deleted");
+        } else return;
+        await loadMe();
+        loadHealth();
+        if (act !== "open") renderChannels();
+      } catch (err) { toast(err.message, true); }
+    });
+    card.querySelector("[data-ch=daily]").addEventListener("change", async (e) => {
+      try {
+        await api(url, { method: "PATCH", body: JSON.stringify({ daily: e.target.checked }) });
+        toast(e.target.checked ? "Daily video on" : "Daily video off");
+      } catch (err) { toast(err.message, true); }
+    });
+  });
+}
+
+async function renderAccount() {
+  await loadMe();
+  const u = me.user;
+  view.innerHTML = `
+    <h1>My account</h1>
+    <div class="card"><h2>${esc(u.email)}</h2>
+      <p class="muted">${esc(ROLE_NAME[u.role] || "User")} · since ${esc(when(u.created))}</p>
+      <label class="check"><input type="checkbox" id="acc-marketing" ${u.marketing ? "checked" : ""}>
+        Send me news, tips and offers about Vid Studio by e-mail</label>
+    </div>
+    <div class="card"><h2>Change password</h2>
+      <form id="pw-form" class="settings-form">
+        <label>Current password<input name="old" type="password" autocomplete="current-password" required></label>
+        <label>New password <span class="muted">(at least 8 characters)</span>
+          <input name="new" type="password" autocomplete="new-password" minlength="8" required></label>
+        <div class="actions"><button class="btn btn-primary">Change password</button></div>
+      </form>
+    </div>
+    <div class="actions"><button class="btn btn-outline" data-action="logout">↪ Sign out</button></div>`;
+  $("#acc-marketing").addEventListener("change", async (e) => {
+    try {
+      await api("/api/me/marketing", { method: "PUT", body: JSON.stringify({ marketing: e.target.checked }) });
+      toast(e.target.checked ? "Subscribed" : "Unsubscribed");
+    } catch (err) { toast(err.message, true); }
+  });
+  $("#pw-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/me/password", { method: "PUT", body: JSON.stringify({ old: e.target.old.value, new: e.target.new.value }) });
+      e.target.reset();
+      toast("Password changed - other devices were signed out");
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+const ROLE_NAME = { superadmin: "Super admin", owner: "Studio owner", user: "User" };
+const isAdmin = (u) => u && (u.role === "superadmin" || u.role === "owner");
+
+async function renderUsers(query = renderUsers.q || "") {
+  await loadMe();
+  if (!isAdmin(me.user)) { view.innerHTML = `<div class="error-box">Only the Studio owner or a super admin sees this page.</div>`; return; }
+  renderUsers.q = query;
+  const users = await api(`/api/users?q=${encodeURIComponent(query)}`);
+  const subs = users.filter((u) => u.marketing && !u.disabled).length;
+  view.innerHTML = `
+    <h1>Users</h1>
+    <div class="actions users-bar">
+      <input id="user-search" type="search" placeholder="Search by e-mail or ID" value="${esc(query)}">
+      <a class="btn btn-outline" href="/api/users/marketing.csv">⬇ Subscribers CSV</a>
+    </div>
+    <p class="muted small">${users.length} account(s)${query ? ` matching “${esc(query)}”` : ""} ·
+      ${subs} agreed to news and offers (the CSV has only them, with the date they agreed).</p>
+    <div class="card"><table class="table users-table">
+      <thead><tr><th>E-mail / ID</th><th>Role</th><th>Channels</th><th>News</th><th>Last sign-in</th><th>Signed in</th><th></th></tr></thead>
+      <tbody>${users.map((u) => `
+        <tr data-id="${esc(u.id)}">
+          <td><div>${esc(u.email)}${u.disabled ? ` <span class="chip error">blocked</span>` : ""}${u.id === me.user.id ? ` <span class="chip done">you</span>` : ""}</div>
+            <code class="user-id" title="Click to copy">${esc(u.id)}</code></td>
+          <td>${esc(ROLE_NAME[u.role] || u.role)}</td>
+          <td>${u.channels.length ? u.channels.map(esc).join("<br>") : "—"}</td>
+          <td>${u.marketing ? "✓ " + esc(when(u.marketing_at)) : "—"}</td>
+          <td>${u.last_login ? esc(when(u.last_login)) : "—"}</td>
+          <td>${u.sessions ? `${u.sessions} device(s)` : "—"}</td>
+          <td class="user-actions">${u.manageable ? `
+            <button class="btn btn-text" data-u="password">🔑 Password</button>
+            <button class="btn btn-text" data-u="logout" ${u.sessions ? "" : "disabled"}>↪ Log out</button>
+            <button class="btn btn-text" data-u="toggle">${u.disabled ? "✅ Unblock" : "⛔ Block"}</button>
+            <button class="btn btn-text btn-danger" data-u="delete">🗑 Delete</button>` : ""}</td>
+        </tr>`).join("") || `<tr><td colspan="7" class="muted">Nobody found.</td></tr>`}</tbody></table></div>
+    <p class="muted small">People sign up themselves at <code>/login</code>. Block: they cannot sign in until unblocked.
+      Log out: ends their Studio sessions on every device. Deleting keeps their channels: they move to you.</p>`;
+
+  let typing;
+  const box = $("#user-search");
+  box.addEventListener("input", () => {
+    clearTimeout(typing);
+    typing = setTimeout(() => renderUsers(box.value).then(() => {
+      const again = $("#user-search");
+      again.focus();
+      again.setSelectionRange(again.value.length, again.value.length);
+    }), 300);
+  });
+  view.querySelectorAll(".user-id").forEach((c) => c.addEventListener("click", () => {
+    navigator.clipboard?.writeText(c.textContent).then(() => toast("ID copied"));
+  }));
+  view.querySelectorAll("tr[data-id]").forEach((row) => row.addEventListener("click", async (e) => {
+    const act = e.target.dataset.u;
+    if (!act) return;
+    const id = row.dataset.id;
+    const u = users.find((x) => x.id === id);
+    const url = `/api/users/${encodeURIComponent(id)}`;
+    try {
+      if (act === "toggle") {
+        if (!u.disabled && !confirm(`Block ${u.email}? They are signed out and cannot sign in until unblocked.`)) return;
+        await api(url, { method: "PATCH", body: JSON.stringify({ disabled: !u.disabled }) });
+        toast(u.disabled ? "Unblocked" : "Blocked");
+      }
+      if (act === "password") {
+        const pw = prompt(`New password for ${u.email} (at least 8 characters). They are signed out everywhere:`);
+        if (!pw) return;
+        await api(url, { method: "PATCH", body: JSON.stringify({ password: pw }) });
+        toast("Password set - tell the user");
+      }
+      if (act === "logout") {
+        await api(`${url}/logout`, { method: "POST" });
+        toast(`${u.email} signed out of the Studio`);
+      }
+      if (act === "delete") {
+        if (!confirm(`Delete ${u.email} for good? Their channels move to you.`)) return;
+        await api(url, { method: "DELETE" });
+        toast("Deleted");
+      }
+      renderUsers();
+    } catch (err) { toast(err.message, true); }
+  }));
 }
 
 async function loadHealth() {
@@ -1215,20 +1447,28 @@ $("#upload-form").querySelector("[value=cancel]").addEventListener("click", () =
 // ------------------------------------------------------------------ wiring
 
 $("#create-btn").addEventListener("click", (e) => { e.stopPropagation(); $("#create-menu").hidden = !$("#create-menu").hidden; });
-document.addEventListener("click", (e) => {
+$("#user-btn").addEventListener("click", (e) => { e.stopPropagation(); $("#user-menu").hidden = !$("#user-menu").hidden; });
+document.addEventListener("click", async (e) => {
   const act = e.target.closest("[data-action]");
   if (act) {
+    e.preventDefault();
     $("#create-menu").hidden = true;
+    $("#user-menu").hidden = true;
     if (act.dataset.action === "new") openNew();
     if (act.dataset.action === "upload") openUpload();
+    if (act.dataset.action === "logout") {
+      await api("/api/auth/logout", { method: "POST" }).catch(() => {});
+      location.href = "/login";
+    }
     return;
   }
-  if (!e.target.closest(".create-wrap")) $("#create-menu").hidden = true;
+  if (!e.target.closest(".create-wrap")) { $("#create-menu").hidden = true; $("#user-menu").hidden = true; }
+  if (e.target.closest("#user-menu a")) $("#user-menu").hidden = true;
   const row = e.target.closest("tr[data-href]");
   if (row && !e.target.closest("a")) location.hash = row.dataset.href;
 });
 $("#menu-btn").addEventListener("click", () => document.body.classList.toggle("nav-open"));
 window.addEventListener("hashchange", () => { document.body.classList.remove("nav-open"); route(); });
 
-loadHealth().then(route);
+loadMe().catch(() => {}).then(loadHealth).then(route);
 setInterval(loadHealth, 30000);

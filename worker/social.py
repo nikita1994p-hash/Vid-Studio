@@ -24,9 +24,9 @@ import uuid
 
 import notify
 import pipeline
+import space
 from pipeline import DATA, PipelineError, env, flag
 
-ACCOUNTS = DATA / "accounts"
 GRAPH = "https://graph.facebook.com/v21.0"
 IG_GRAPH = "https://graph.instagram.com/v21.0"
 THREADS = "https://graph.threads.net/v1.0"
@@ -38,6 +38,8 @@ PLATFORMS = {
         "token_url": "https://oauth2.googleapis.com/token",
         "scopes": ["https://www.googleapis.com/auth/youtube.upload",
                    "https://www.googleapis.com/auth/youtube.readonly",
+                   # make an uploaded private video public, or delete it (Telegram buttons)
+                   "https://www.googleapis.com/auth/youtube.force-ssl",
                    # views, watch time and (once monetized) revenue for the Earnings page
                    "https://www.googleapis.com/auth/yt-analytics.readonly",
                    "https://www.googleapis.com/auth/yt-analytics-monetary.readonly"],
@@ -98,8 +100,7 @@ class SocialError(PipelineError):
 # ------------------------------------------------------------------ storage
 
 def _path(name):
-    ACCOUNTS.mkdir(parents=True, exist_ok=True)
-    return ACCOUNTS / name
+    return space.account_file(name)
 
 
 def _apps():
@@ -244,7 +245,8 @@ def start_login(platform, base=None):
         raise SocialError(f"first paste the {p['name']} app keys (Accounts -> {p['name']} -> App keys)")
     state = secrets.token_urlsafe(24)
     pending = pipeline._read_json(_path("pending.json"), {}) or {}
-    entry = {"platform": platform, "at": time.time(), "redirect_uri": redirect_uri(platform, base)}
+    entry = {"platform": platform, "at": time.time(), "redirect_uri": redirect_uri(platform, base),
+             "channel": space.current()}
     q = {p.get("client_param", "client_id"): app["client_id"], "redirect_uri": entry["redirect_uri"],
          "response_type": "code", "scope": p.get("scope_sep", " ").join(p["scopes"]), "state": state,
          **p.get("auth_extra", {})}
@@ -267,6 +269,9 @@ def finish_login(platform, code, state):
     pipeline._write_json(_path("pending.json"), pending)
     if not entry or entry["platform"] != platform:
         raise SocialError("this login link is old or was opened twice - press Connect again")
+    if entry.get("channel"):
+        # Google sends the browser back without our channel: the login belongs where it started
+        space.set_current(entry["channel"])
     app = _apps()[platform]
     form = {p.get("client_param", "client_id"): app["client_id"], "client_secret": app["client_secret"],
             "code": code, "grant_type": "authorization_code", "redirect_uri": entry["redirect_uri"]}
@@ -456,6 +461,47 @@ def _post_youtube(acct, job_id, video, result, mode):
     return {"url": f"https://youtube.com/shorts/{vid}", "id": vid, "note": note}
 
 
+def _uploaded_id(job_id):
+    vid = (pipeline.load_job(job_id)["status"].get("youtube") or {}).get("video_id")
+    if not vid:
+        raise SocialError("this video is not on YouTube yet")
+    return vid
+
+
+def _youtube_call(method, url, **kw):
+    try:
+        return _call(method, url, **kw)
+    except Exception as e:
+        if "insufficient" in str(e).lower():   # the login is older than the force-ssl scope
+            raise SocialError("YouTube did not allow it: reconnect once (Studio -> Accounts -> YouTube -> "
+                              "Switch account) so Vid Studio may change your videos")
+        raise
+
+
+def youtube_make_public(job_id):
+    """The Telegram 'Publish' button: a private upload goes public now."""
+    vid = _uploaded_id(job_id)
+    acct = _token("youtube")
+    _youtube_call("PUT", "https://www.googleapis.com/youtube/v3/videos", params={"part": "status"},
+                  json_body={"id": vid, "status": pipeline.youtube_status("public")},
+                  headers={"Authorization": f"Bearer {acct['access_token']}"})
+    job = pipeline.Job(job_id)
+    job.status["youtube"] = {**job.status.get("youtube", {}), "mode": "public", "published_at": pipeline._now()}
+    job.stage("youtube", "done", "public")
+    return f"https://youtube.com/shorts/{vid}"
+
+
+def youtube_delete(job_id):
+    """The Telegram 'Delete' button: remove the upload from YouTube (the video stays in the Studio)."""
+    vid = _uploaded_id(job_id)
+    acct = _token("youtube")
+    _youtube_call("DELETE", "https://www.googleapis.com/youtube/v3/videos", params={"id": vid},
+                  headers={"Authorization": f"Bearer {acct['access_token']}"})
+    job = pipeline.Job(job_id)
+    job.status["youtube"] = {"state": "none", "deleted_at": pipeline._now(), "deleted_id": vid}
+    job.stage("youtube", "pending", "deleted from YouTube")
+
+
 def _post_facebook(acct, job_id, video, result, mode):
     page = next((x for x in acct.get("pages", []) if x["id"] == acct.get("page_id")), None)
     if not page:
@@ -620,8 +666,13 @@ def post(platform, job_id, mode="auto"):
         raise
     _mark(job_id, platform, state="posted", mode=mode, url=out.get("url"), id=out.get("id"),
           note=out.get("note"), account=who)
+    yt = pipeline.youtube_status(mode) if platform == "youtube" else {}
+    private = yt.get("privacyStatus") == "private" and not yt.get("publishAt")   # waits for the creator's OK
     notify.send("posted", f"📤 {p['name']} ({who or 'account'}): “{data['result'].get('title')}”"
-                          + (f"\n{out['url']}" if out.get("url") else "") + (f"\n{out['note']}" if out.get("note") else ""))
+                          + (" — private, waiting for your OK" if private else "")
+                          + (f"\n{out['url']}" if out.get("url") else "") + (f"\n{out['note']}" if out.get("note") else ""),
+                buttons=[[("🌍 Publish now", f"pub|{job_id}"), ("🗑 Delete from YouTube", f"del|{job_id}")]]
+                if private else None)
     return {"platform": platform, "name": p["name"], **out}
 
 

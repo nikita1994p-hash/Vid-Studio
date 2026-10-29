@@ -11,9 +11,10 @@ Numbers come from data/stats.json (Earnings -> Refresh); nothing here calls a pl
 import datetime as dt
 
 import pipeline
+import space
 from pipeline import DATA, JOBS
 
-NOTIFIED = DATA / "ab_notified.json"
+NOTIFIED = space.Here("ab_notified.json")
 
 
 def _parse(ts):

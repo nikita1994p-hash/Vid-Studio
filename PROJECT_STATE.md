@@ -134,3 +134,37 @@ Runs in Docker on Windows 11 from this folder.
 - Windows `python3` alias (WindowsApps) can hang in background shells — use PowerShell `Invoke-RestMethod` for API checks.
 - Long scratch paths break Win32 cwd; project path is short now.
 - Rebuild after code changes: `docker compose up -d --build worker`.
+
+## Publish timing (added 29.10.2026)
+- PUBLISH_TIME 09:00, PUBLISH_TIMEZONE Europe/Kyiv (saved in data/settings.json), same as the n8n daily run.
+- `youtube_status("schedule")`: if the video is ready within 3 h after the publish time (or up to 10 min before), it goes public at once; ready earlier the same day -> publishAt today; otherwise tomorrow.
+- AUTO_PUBLISH is still false: the daily run uploads private for the manual test week.
+- `data/tools/redo_pictures.py <job_id>`: redo FLUX pictures for a video that fell back to cards, re-render, new cover (run in the worker with `-w /app`, MSYS_NO_PATHCONV=1 from Git Bash).
+
+## Accounts and channels — Stage 1 (added 29.10.2026)
+Built so the SaaS move later swaps storage, not logic.
+- `worker/space.py` — channels. `data/channels/<id>/` holds channel.json {id,name,owner,template,daily,created}, jobs/,
+  topics.json, history.json, settings.json, script_rules.md, parts_queue.json, stats.json, income.json,
+  ab_notified.json, notify_state.json, accounts/ (youtube.json, telegram.json…). Shared in /data: music, sfx,
+  previews, accounts/apps.json + pending.json (OAuth app keys, logins in progress), users.json, sessions.json,
+  telegram_offsets.json. A ContextVar holds the current channel; `space.Here("x")` paths resolve per call;
+  `space.thread()` / `copy_context()` carry it into threads (_hard_timeout pool, notify.send). `space.migrate()`
+  moved the old single-channel files into the first channel on first start (owner claimed by the first account).
+- `worker/auth.py` — e-mail + password (scrypt), sessions (cookie `vs_session`, SHA-256 stored, 30 days), roles
+  owner/user, marketing consent (separate unticked box, `marketing_at`), CSV export of subscribers only.
+  Login slowdown after 5 wrong passwords. No e-mail verification / reset yet (needs SMTP: SaaS stage).
+- app.py middleware: /login, /static, /api/auth, /health are open; /produce, /social/*, /jobs/* are for n8n
+  (channel from the video id; `INTERNAL_TOKEN` env enables a header check — set it on a server);
+  everything else needs a session and runs in the user's open channel (or the video's channel if theirs).
+  A user with no channel gets 409 "create a channel first" — never another user's data.
+- Channel API: GET /api/me, POST /api/channels {name, template}, POST /api/channels/{id}/open, PATCH (name, daily),
+  DELETE ?confirm=<name>; users (owner): GET/PATCH/DELETE /api/users, GET /api/users/marketing.csv.
+- `/produce` (n8n 9:00) makes one video per channel with daily=true and returns {videos:[{job_id, channel, platforms}]};
+  the n8n code node posts each (n8n/yt-autopilot-workflow.json patched; timeout 60 min).
+- `worker/niches.py` — NICHE_KIND (business | health) wording for script, fact check, hook rewrite/editor, topic
+  check and suggestions; templates `business` and `sport_health` (settings, SPORT_RULES, sport_health_ideas.txt).
+  hookscore_shorts.score(text, topic, kind): health counts units (minutes, reps, steps…) and body stakes.
+- Telegram buttons: a private YouTube upload's "posted" alert has 🌍 Publish now / 🗑 Delete from YouTube;
+  `notify.poll_loop` reads presses for every channel's bot (only the alert's chat may press). Needs the new
+  scope youtube.force-ssl → reconnect YouTube once (Accounts → Switch account); privacy.html lists it.
+- PUBLISH_TIME 09:00 / PUBLISH_TIMEZONE Europe/Kyiv now also in .env (default for new channels).

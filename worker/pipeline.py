@@ -11,7 +11,9 @@ import datetime as dt
 import json
 
 import hookscore_shorts
+import niches
 import math
+import space
 import os
 import re
 import shutil
@@ -26,12 +28,13 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
-DATA = Path(os.environ.get("DATA_DIR", "/data"))
-JOBS = DATA / "jobs"
+DATA = space.ROOT                         # shared: music, sfx, previews, platform app keys
+JOBS = space.Here("jobs")                 # the rest belongs to the current channel
 SKILLS = Path(os.environ.get("SKILLS_MOUNT", "/skills"))
 VOICE_FILE = Path(os.environ.get("VOICE_FILE", "/youtube/voice.md"))
-RULES_FILE = DATA / "script_rules.md"     # editable in the dashboard (Settings) or Notepad
-PARTS_FILE = DATA / "parts_queue.json"    # the remaining parts of a story split into 2-3 Shorts
+RULES_FILE = space.Here("script_rules.md")     # editable in the dashboard (Settings) or Notepad
+PARTS_FILE = space.Here("parts_queue.json")    # the remaining parts of a story split into 2-3 Shorts
+HISTORY = space.Here("history.json")
 
 DEFAULT_RULES = """\
 # Script rules. VidAuto reads this file every time it writes a script.
@@ -87,9 +90,9 @@ class PipelineError(RuntimeError):
     pass
 
 
-SETTINGS_FILE = DATA / "settings.json"   # what the Studio Settings page saves; wins over .env
+SETTINGS_FILE = space.Here("settings.json")   # what the Studio Settings page saves; wins over .env
 _job_options = contextvars.ContextVar("job_options", default=None)  # one video's own choices
-_settings_cache = {"mtime": None, "data": {}}
+_settings_cache = {}   # channel folder -> (mtime, data)
 
 # Everything the Studio can change. Keys (API tokens) are deliberately not here: they stay in .env.
 # type: text | textarea | number | bool | select | color | signed (a "+8%"-style value, unit in "unit")
@@ -98,6 +101,8 @@ SETTINGS_SCHEMA = [
     {"key": "CHANNEL_LANGUAGE", "group": "Content", "label": "Text language (script, titles, captions)", "type": "select",
      "options": ["en", "es", "pt", "de", "fr", "it", "pl", "uk", "ru", "hi", "ja", "ko"], "default": "en"},
     {"key": "CHANNEL_NICHE", "group": "Content", "label": "Channel niche", "type": "textarea"},
+    {"key": "NICHE_KIND", "group": "Content", "label": "Niche kind (what the checks and hook scores look for)",
+     "type": "select", "options": list(niches.KINDS), "default": "business"},
     {"key": "CHANNEL_AUDIENCE", "group": "Content", "label": "Audience", "type": "textarea"},
     {"key": "SERIES_NAME", "group": "Content", "label": "Series name", "type": "text"},
     {"key": "SERIES_RULES", "group": "Content", "label": "Series rules", "type": "textarea"},
@@ -111,7 +116,7 @@ SETTINGS_SCHEMA = [
     {"key": "MAX_PARTS", "group": "Content", "label": "Split long stories into up to N parts", "type": "number", "min": 1, "max": 3, "default": "3"},
     {"key": "DESCRIPTION_FOOTER", "group": "Content", "label": "Description footer", "type": "text"},
     {"key": "TOPIC_QUEUE", "group": "Content", "label": "Empty topic = take the next one from the Topics queue", "type": "bool", "default": "true"},
-    {"key": "TOPIC_CHECK", "group": "Content", "label": "Check new topics (spelling, real legal business) before they join the queue", "type": "bool", "default": "true"},
+    {"key": "TOPIC_CHECK", "group": "Content", "label": "Check new topics (spelling, real, safe, legal) before they join the queue", "type": "bool", "default": "true"},
     {"key": "FACT_CHECK", "group": "Content", "label": "Fact check before the voice-over", "type": "select",
      "options": ["flag", "fix", "off"], "default": "flag"},
     # voice
@@ -196,14 +201,16 @@ SETTING_DEFAULTS = {s["key"]: s["default"] for s in SETTINGS_SCHEMA if "default"
 
 
 def studio_settings():
-    """data/settings.json, re-read only when the file changes."""
+    """The channel's settings.json, re-read only when the file changes."""
     try:
-        mtime = SETTINGS_FILE.stat().st_mtime
-    except FileNotFoundError:
+        path = SETTINGS_FILE.resolve()
+        mtime = path.stat().st_mtime
+    except (FileNotFoundError, space.SpaceError):
         return {}
-    if mtime != _settings_cache["mtime"]:
-        _settings_cache.update(mtime=mtime, data=_read_json(SETTINGS_FILE, {}) or {})
-    return _settings_cache["data"]
+    cached = _settings_cache.get(path)
+    if not cached or cached[0] != mtime:
+        cached = _settings_cache[path] = (mtime, _read_json(path, {}) or {})
+    return cached[1]
 
 
 def save_settings(changes):
@@ -453,8 +460,8 @@ class Plan(BaseModel):
     description: str
     tags: list[str]
     cover_lines: list[str] = Field(default_factory=list, description=(
-        "2-3 lines for the video's cover picture, max 14 characters each, no emoji: line 1 is the money "
-        "number (e.g. '$4K/MONTH'), the rest name the business in 1-3 words (e.g. 'MOBILE', 'DETAILING')"))
+        "2-3 lines for the video's cover picture, max 14 characters each, no emoji: line 1 is the key "
+        "number (e.g. '$4K/MONTH', '10 MIN/DAY'), the rest name the topic in 1-3 words (e.g. 'MOBILE', 'DETAILING')"))
 
 
 class FactIssue(BaseModel):
@@ -506,16 +513,21 @@ def _formulas():
 
 
 def _voice_profile():
-    if not VOICE_FILE.exists():
+    """The channel's own voice.md; the shared one from the yt skills only for the first channel,
+    whose voice it was written for."""
+    own = space.folder() / "voice.md"
+    first = space.list_ids()[:1] == [space.current()]
+    path = own if own.exists() else VOICE_FILE if first else None
+    if not path or not path.exists():
         return ""
-    text = VOICE_FILE.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
     # The shipped template is instructions, not a voice. Using it would make every script
     # sound like a README.
     return "" if "Copy this to" in text else text[:6000]
 
 
 def _history():
-    path = DATA / "history.json"
+    path = HISTORY.resolve()
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
 
@@ -569,6 +581,7 @@ def _prompt(topic, history, episode, part=None, script=None):
     lang = env("CHANNEL_LANGUAGE", "en")
     n_body = int(env("BODY_SCENES", "6"))
     series = env("SERIES_NAME")
+    N = niche()
     lines = [
         f"You write a YouTube Short for a channel about: {env('CHANNEL_NICHE', 'surprising science facts')}.",
         *([f"This is episode #{episode} of the series '{series}'. {env('SERIES_RULES')}"] if series else []),
@@ -595,7 +608,7 @@ def _prompt(topic, history, episode, part=None, script=None):
         "the first six words; (3) STAKES - what it costs, what you lose or waste, what to stop or never do;",
         "(4) CURIOSITY - an open gap (why, how, what, but, until, nobody) that the hook does NOT answer",
         "itself, so never 'because', 'so that', 'which means'; (5) 9-18 words. It must still sound like a",
-        "person talking, stay on this exact business and use only figures the body states.",
+        f"person talking, stay on this exact {N['subject']} and use only figures the body states.",
         "Hook rules: " + " | ".join(rules),
         "Formulas (id - name - shape - example):",
     ]
@@ -617,15 +630,15 @@ def _prompt(topic, history, episode, part=None, script=None):
         "distance or as a silhouette; prefer the place, the equipment or the finished result.",
         "stock_query: 2-3 plain English nouns for a PHOTO of what is literally visible (e.g. 'laundromat',",
         "'vending machine', 'pressure washer driveway'), never abstract ideas, people's names or brands. on_screen: the one number or fact the viewer must",
-        "remember from that scene, max 5 words. on_screen ALWAYS writes numbers as digits with $, K and /",
-        "(e.g. '$300/day', 'Startup: $12K', 'Profit: $4K/mo') - never spelled out, unlike the narration.",
+        f"remember from that scene, max 5 words. on_screen ALWAYS {N['on_screen_rule']}",
+        f"(e.g. {N['on_screen']}) - never spelled out, unlike the narration.",
         "",
         "TITLES - 5 options, max 60 characters, subject first, a concrete number or name if possible,",
         "must not repeat the hook word for word.",
         "DESCRIPTION - 2-3 sentences that answer the query a real person would type, then 3 hashtags",
         "including #shorts. TAGS - 8-12 short search phrases, no '#', no commas inside a tag.",
         "COVER_LINES - the cover picture viewers see before they tap: 2-3 lines, max 14 characters each,",
-        "line 1 the money figure from the script as digits (e.g. '$4K/MONTH', '$300/DAY'), then the business",
+        f"line 1 {N['cover']}",
         "in 1-3 plain words. The figure must be one the script really says.",
         "",
     ]
@@ -712,11 +725,17 @@ def _hard_timeout(fn, seconds):
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as Timeout
     pool = ThreadPoolExecutor(max_workers=1)
     try:
-        return pool.submit(fn).result(timeout=seconds)
+        # the call runs in the pool's thread: give it this channel and this video's options
+        return pool.submit(contextvars.copy_context().run, fn).result(timeout=seconds)
     except Timeout:
         raise PipelineError(f"no answer within {seconds}s (model overloaded?)")
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
+
+
+def niche():
+    """The wording of this channel's niche kind (NICHE_KIND) for prompts and checks."""
+    return niches.kind(env("NICHE_KIND", "business"))
 
 
 def text_models():
@@ -756,20 +775,18 @@ def fact_check(job, client, plan, own_script=False):
         job.stage("check", "skipped", "off in Settings")
         return plan
     job.stage("check", "running", "checking every figure")
+    N = niche()
     script = "\n".join([f"HOOK {i}: {h.text}" for i, h in enumerate(plan.hooks, 1)] +
                        [f"SCENE {i}: {s.narration}   [on screen: {s.on_screen}]" for i, s in enumerate(plan.scenes, 1)] +
                        ([f"COVER: {' / '.join(plan.cover_lines)}"] if plan.cover_lines else []))
     prompt = "\n".join([
-        f"You are the fact checker for a YouTube Short about this business: {plan.topic}.",
+        f"You are the fact checker for a YouTube Short about this {N['subject']}: {plan.topic}.",
         f"Audience: {env('CHANNEL_AUDIENCE', 'American viewers')}. Today is {dt.date.today().isoformat()}.",
-        "Check every money figure (startup cost, prices, profit, income), every time span, quantity and",
-        "factual claim against what is typical for this business in that market. Also check that the same",
-        "thing never gets two different numbers (hook vs scenes vs on-screen text vs cover), and that profit",
-        "is not confused with revenue.",
+        *N["fact_focus"],
         "Report only real problems: a figure far outside the typical range, a contradiction, an invented",
         "statistic or percentage, or a legal/safety claim that is wrong. A realistic figure is NOT an issue,",
         "even if other sources say a bit more or less. If everything is fine, verdict 'ok' and no issues.",
-        "For a body scene give fixed_narration: the whole line rewritten with a realistic figure, same voice",
+        f"For a body scene give fixed_narration: the whole line rewritten with {N['fact_fix']}, same voice",
         "and about the same length, spoken numbers (words, not digits). For a hook leave fixed_narration empty.",
         "",
         "SCRIPT:",
@@ -943,7 +960,7 @@ def score_hooks(job_dir, texts, topic=""):
     channel's scorer (hookscore_shorts.py); 'skill' uses the yt-script skill's general hookscore.py."""
     texts = [t.replace("\n", " ").strip() for t in texts]
     if env("HOOK_SCORER", "shorts") != "skill":
-        return [hookscore_shorts.score(t, topic) for t in texts]
+        return [hookscore_shorts.score(t, topic, env("NICHE_KIND", "business")) for t in texts]
     forms = [_digits(t) for t in texts]
     path = job_dir / "hooks.txt"
     path.write_text("\n".join(forms) + "\n", encoding="utf-8")
@@ -994,6 +1011,7 @@ def improve_hooks(job, client, plan):
     pool = [(r["verdict"], h, r) for h, r in zip(plan.hooks, first)]
     log = [{"round": 0, "best": max(v for v, _, _ in pool), "hooks": [r["verdict"] for _, _, r in pool]}]
     body = "\n".join(f"{i}. {s.narration}" for i, s in enumerate(plan.scenes, 1))
+    N = niche()
     for rnd in range(1, rounds + 1):
         best = max(v for v, _, _ in pool)
         if best >= target:
@@ -1003,25 +1021,24 @@ def improve_hooks(job, client, plan):
         for v, h, r in sorted(pool, key=lambda x: -x[0])[:5]:
             props = r.get("properties") or {}
             low = sorted(props, key=props.get)[:2]
-            fixes = {**HOOK_FIX, **hookscore_shorts.FIX}
+            fixes = {**HOOK_FIX, **hookscore_shorts.fix(env("NICHE_KIND", "business"))}
             notes.append(f"- [{h.formula_id}] \"{h.text}\" scores {v}; weakest: " +
                          "; ".join(f"{k} {props[k]} -> {fixes.get(k, '')}" for k in low))
         prompt = "\n".join([
-            f"You sharpen hooks for a YouTube Short in the series about one business: {plan.topic}.",
+            f"You sharpen hooks for a YouTube Short in the series about one {N['subject']}: {plan.topic}.",
             f"Audience: {env('CHANNEL_AUDIENCE', 'American viewers')}. Language: {env('CHANNEL_LANGUAGE', 'English')}.",
             f"Each hook is scored 0-100; the target is {target}+. The score is 70% the average and 30% the",
             "WEAKEST of five properties, so fix the weakest ones first:",
-            *[f"- {k}: {d}" for k, d in hookscore_shorts.DESCRIBE.items()],
+            *[f"- {k}: {d}" for k, d in hookscore_shorts.describe(env("NICHE_KIND", "business")).items()],
             "A strong hook has a figure from the body in its first five words, says what is won or lost",
-            "(per month, per job, what it costs) and leaves a gap the video closes, e.g. 'Why do you pay",
-            "shop rent when an eight thousand dollar van detailing cars clears four thousand a month?'",
+            f"{N['hook_stakes']} and leaves a gap the video closes, e.g. {N['hook_example']}",
             "- but only with figures and facts from THIS body.",
             "",
             "Current hooks and what holds each back:",
             *notes,
             "",
             "Write 2 new versions of each hook above (10 in total), keeping its formula_id. Rules:",
-            "- about THIS business only; the viewer must know within the hook what business it is;",
+            f"- about THIS {N['subject']} only; the viewer must know within the hook what it is about;",
             "- every figure must be one the body states (below) - never invent or inflate numbers;",
             "- spoken English a real person would say; numbers in words, no digits or symbols;",
             "- no false promise, no 'guaranteed', no clickbait the video does not pay off;",
@@ -1040,16 +1057,16 @@ def improve_hooks(job, client, plan):
         listing = "\n".join(f"{i}. {h.text}   [loop_line said right before it: {h.loop_line}]"
                             for i, h in enumerate(candidates, 1))
         review = "\n".join([
-            f"You are a strict editor for a YouTube Short about this business: {plan.topic}.",
-            "Pass a hook ONLY if all are true: (1) it is clearly about this exact business; (2) every number,",
-            "statistic or fact about the business is stated in, or follows directly from, the body below -",
+            f"You are a strict editor for a YouTube Short about this {N['subject']}: {plan.topic}.",
+            f"Pass a hook ONLY if all are true: (1) it is clearly about this exact {N['subject']}; (2) every number,",
+            f"statistic or fact about the {N['subject']} is stated in, or follows directly from, the body below -",
             "nothing invented or inflated; (3) it sounds like natural speech, not keyword stuffing; (4) it",
             "promises nothing the body does not deliver; (5) no spelling or grammar mistakes; (6) a listener",
             "understands it on first hearing - reject anything forced, contradictory or meaningless read aloud",
             "(e.g. 'how can you never risk your savings before...'); (7) its loop_line, said right before it,",
             "flows into it as one natural thought.",
-            "Framing the viewer's own situation (paying rent, a day job, free weekends, savings at risk) is",
-            "fine and is NOT an invented fact - judge only claims about the business and its numbers.",
+            f"Framing the viewer's own situation ({N['viewer_framing']}) is",
+            f"fine and is NOT an invented fact - judge only claims about the {N['subject']} and its numbers.",
             "",
             "BODY:", body, "", "HOOKS:", listing,
         ])
@@ -1835,7 +1852,11 @@ def youtube_status(mode):
         hh, mm = (int(x) for x in env("PUBLISH_TIME", "18:00").split(":"))
         now = dt.datetime.now(tz)
         when = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        if when < now + dt.timedelta(hours=1):
+        if when <= now + dt.timedelta(minutes=10) and now - when < dt.timedelta(hours=3):
+            # the daily run made the video at publish time: go public now, not tomorrow
+            status["privacyStatus"] = "public"
+            return status
+        if when < now + dt.timedelta(minutes=10):
             when += dt.timedelta(days=1)
         status["publishAt"] = when.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return status
@@ -2191,7 +2212,7 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
         history.append({"date": dt.date.today().isoformat(), "topic": part["topic"] if part else plan.topic,
                         "title": title, "job": job.id, "episode": episode, "part": k, "parts": total,
                         **({"variant": variant} if variant else {})})
-        _write_json(DATA / "history.json", history)
+        _write_json(HISTORY.resolve(), history)
         if not variant:
             # remember what is left of a split story: the next run (dashboard or n8n) makes the next part
             said = " ".join([hook] + [s.narration for s in plan.scenes])

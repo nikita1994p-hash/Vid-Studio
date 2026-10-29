@@ -11,11 +11,12 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+import niches
 import pipeline
+import space
 from pipeline import DATA, PipelineError
 
-TOPICS = DATA / "topics.json"
-STARTER = Path(__file__).parent / "business_ideas.txt"   # 365 boring, startable businesses
+TOPICS = space.Here("topics.json")
 
 
 def _load():
@@ -61,20 +62,17 @@ class TopicReview(BaseModel):
 def _review(names):
     """One model call over up to ~80 topic names -> {index: TopicVerdict}. Raises when no model answers."""
     listing = "\n".join(f"{i}. {t}" for i, t in enumerate(names, 1))
+    N = pipeline.niche()
     prompt = "\n".join([
         "You check the topic list of the YouTube series "
-        f"'{pipeline.env('SERIES_NAME') or '365 Businesses That Make Money'}' "
-        f"(audience: {pipeline.env('CHANNEL_AUDIENCE', 'American viewers')}). Each topic is one small business.",
+        f"'{pipeline.env('SERIES_NAME') or 'this channel'}' "
+        f"(audience: {pipeline.env('CHANNEL_AUDIENCE', 'American viewers')}). Each topic is {N['topic_item']}.",
         "For every topic decide:",
-        "- ok: a real business people actually run in that market, legal, honestly able to make money,",
-        "  spelled correctly. Needing a license, permits, insurance, a lease or a big budget is FINE -",
-        "  the video covers the startup cost and the catch;",
-        "- fix: the same business but the name has a typo, wrong word, broken brackets, a brand name or more",
-        "  than 6 words - give the corrected name;",
-        "- doubt: ONLY when it is not a real business, illegal, a scam or get-rich-quick scheme, a",
-        "  franchise/brand, too vague to film (e.g. 'Online business'), or a duplicate of an earlier topic",
-        "  in this list.",
-        "Never invent a different business. Answer for every number.",
+        *N["topic_ok"],
+        f"- fix: the same {N['subject']} but the name has a typo, wrong word, broken brackets, a brand name or",
+        "  more than 6 words - give the corrected name;",
+        f"- doubt: ONLY when it is {N['topic_doubt']}, or a duplicate of an earlier topic in this list.",
+        f"Never invent a different {N['subject']}. Answer for every number.",
         "",
         listing,
     ])
@@ -122,19 +120,27 @@ def check(batch=80):
 
 
 def load_starter():
-    return add(STARTER.read_text(encoding="utf-8").splitlines())
+    """The starter list of the channel's template (365 businesses, 100 habits...)."""
+    return add(niches.starter_topics(space.get(space.current()).get("template") or "business"))
 
 
 def suggest(count=30):
-    """Ask Gemini for fresh business ideas that are neither filmed nor queued yet."""
+    """Ask Gemini for fresh ideas that are neither filmed nor queued yet."""
     count = max(5, min(100, int(count)))
     taken = [x["topic"] for x in _load()] + [h.get("topic") or "" for h in pipeline._history()]
-    prompt = (f"List {count} real, boring, startable small businesses for the YouTube series "
-              f"'{pipeline.env('SERIES_NAME') or '365 Businesses That Make Money'}' "
-              f"(audience: {pipeline.env('CHANNEL_AUDIENCE', 'American viewers')}). Each one a short name of what the "
-              "business does, 2-6 words, e.g. 'Mobile car detailing', 'Bounce house rentals'. No franchises, no "
-              "brand names, nothing illegal or get-rich-quick. Mix startup costs from under $1K to $50K. "
-              "Do not repeat any of these: " + "; ".join(taken[-300:]) +
+    if pipeline.env("NICHE_KIND", "business") == "health":
+        ask = (f"List {count} specific, safe, science-backed exercises, habits or health facts for the YouTube "
+               f"series '{pipeline.env('SERIES_NAME') or 'this channel'}' about {pipeline.env('CHANNEL_NICHE')} "
+               f"(audience: {pipeline.env('CHANNEL_AUDIENCE', 'American viewers')}). Each one 2-6 words, e.g. "
+               "'Wall sit for knee strength', 'Morning light for better sleep'. No diseases, cures, drugs, "
+               "supplements, diets or brand names. ")
+    else:
+        ask = (f"List {count} real, boring, startable small businesses for the YouTube series "
+               f"'{pipeline.env('SERIES_NAME') or '365 Businesses That Make Money'}' "
+               f"(audience: {pipeline.env('CHANNEL_AUDIENCE', 'American viewers')}). Each one a short name of what "
+               "the business does, 2-6 words, e.g. 'Mobile car detailing', 'Bounce house rentals'. No franchises, "
+               "no brand names, nothing illegal or get-rich-quick. Mix startup costs from under $1K to $50K. ")
+    prompt = (ask + "Do not repeat any of these: " + "; ".join(taken[-300:]) +
               '\nAnswer with JSON only: {"topics": ["...", "..."]}')
     client, errors = pipeline._client(), []
     for model in pipeline.text_models():

@@ -16,10 +16,11 @@ import uuid
 
 import pipeline
 import social
+import space
 from pipeline import DATA, JOBS, PipelineError
 
-STATS = DATA / "stats.json"
-INCOME = DATA / "income.json"
+STATS = space.Here("stats.json")
+INCOME = space.Here("income.json")
 YT_ANALYTICS = "https://youtubeanalytics.googleapis.com/v2/reports"
 INCOME_SOURCES = ["YouTube (paid out)", "TikTok Creator Rewards", "Instagram / Facebook", "X", "Sponsor",
                   "Affiliate", "Digital product", "Other"]
