@@ -61,7 +61,9 @@ button { font: inherit; color: inherit; cursor: pointer; letter-spacing: inherit
 .menu button:hover { background: var(--blue); }
 
 /* buttons: pills */
-.btn { border-radius: 980px; padding: 8px 18px; font-weight: 500; font-size: 14px; border: 0;
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; line-height: 1.2;
+  text-align: center; text-decoration: none !important; vertical-align: middle;
+  border-radius: 980px; padding: 8px 18px; font-weight: 500; font-size: 14px; border: 0;
   transition: background .2s var(--ease), transform .1s var(--ease), filter .2s; white-space: nowrap; }
 .btn:active:not(:disabled) { transform: scale(.97); }
 .btn-outline { background: rgba(255, 255, 255, .1); color: var(--text); }
@@ -170,6 +172,8 @@ input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color])
   display: block; width: 100%; margin-top: 6px; background: var(--field);
   border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 11px 14px; color: var(--text); font: inherit; font-size: 14px;
   transition: border-color .2s, box-shadow .2s; }
+/* text boxes stretch only downwards, never wider than their column */
+textarea { resize: vertical; max-width: 100%; min-height: 44px; }
 select { display: block; width: 100%; max-width: 100%; min-width: 0; margin-top: 6px; background-color: var(--field); color: var(--text);
   border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 11px 36px 11px 14px; font: inherit; font-size: 14px;
   text-overflow: ellipsis; appearance: none; -webkit-appearance: none; cursor: pointer;
@@ -369,6 +373,9 @@ tr.winner td { background: #30d15814; }
 .channel-form input[name=name] { flex: 1; min-width: 220px; margin-top: 0; }
 .channel-form select, .channel-form .btn { margin-top: 0; }
 .channel-card { margin-top: 16px; }
+.channel-card > .actions { margin: 0 0 18px; }
+.channel-card > label.check { margin-bottom: 12px; }
+.channel-card details .actions { margin-top: 4px; }
 .channel-card .ch-name { flex: 1; min-width: 200px; margin-top: 0; }
 .channel-card .ch-confirm { margin-top: 0; }
 .small { font-size: 12px; }

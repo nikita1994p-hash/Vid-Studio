@@ -1176,8 +1176,8 @@ async function renderChannels() {
         <details><summary class="muted">Delete this channel…</summary>
           <p class="muted small">Deletes all its videos, topics, settings, logins and earnings from this computer.
             Type the channel name to confirm.</p>
-          <div class="actions"><input class="ch-confirm" placeholder="${esc(c.name)}">
-            <button class="btn btn-danger" data-ch="delete">Delete channel</button></div>
+          <div class="actions"><input class="ch-confirm" placeholder="${esc(c.name)}" autocomplete="off">
+            <button class="btn btn-danger" data-ch="delete" disabled>Delete channel</button></div>
         </details>
       </div>`).join("")}`;
 
@@ -1208,14 +1208,20 @@ async function renderChannels() {
           await api(`${url}/open`, { method: "POST" });
           location.hash = "#/";
         } else if (act === "delete") {
-          const confirm = card.querySelector(".ch-confirm").value;
-          await api(`${url}?confirm=${encodeURIComponent(confirm)}`, { method: "DELETE" });
+          const typed = card.querySelector(".ch-confirm").value;
+          if (!window.confirm(`Delete the channel “${typed}” for good? All its videos, topics, settings, logins and `
+            + "earnings are removed from this computer. This cannot be undone. (YouTube itself is not touched.)")) return;
+          await api(`${url}?confirm=${encodeURIComponent(typed)}`, { method: "DELETE" });
           toast("Channel deleted");
         } else return;
         await loadMe();
         loadHealth();
         if (act !== "open") renderChannels();
       } catch (err) { toast(err.message, true); }
+    });
+    const name = me.channels.find((c) => c.id === id)?.name;
+    card.querySelector(".ch-confirm").addEventListener("input", (e) => {
+      card.querySelector("[data-ch=delete]").disabled = e.target.value.trim() !== name;
     });
     card.querySelector("[data-ch=daily]").addEventListener("change", async (e) => {
       try {
