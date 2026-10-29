@@ -19,7 +19,10 @@ import space
 # Super admins see and control every account (SUPERADMIN_EMAILS in .env, comma separated). The first
 # account of a fresh Studio is its 'owner' with the same powers; everybody else is a 'user'.
 SUPERADMINS = {x.strip().lower() for x in os.environ.get("SUPERADMIN_EMAILS", "").split(",") if x.strip()}
-ADMIN_ROLES = ("superadmin", "owner")
+FULL_ROLES = ("superadmin", "owner")         # every action on every account (but other super admins)
+ADMIN_ROLES = FULL_ROLES + ("admin",)       # may open the Users page
+ROLES = ("user", "admin", "owner")          # what a full admin may give; superadmin comes only from .env
+ACTIONS = ("password", "block", "logout", "delete", "role")
 USERS = space.ROOT / "users.json"
 SESSIONS = space.ROOT / "sessions.json"
 SESSION_DAYS = 30
@@ -106,7 +109,7 @@ def register(email, password, marketing=False):
                 "disabled": False}
         users.append(user)
         _save_users(users)
-    if user["role"] in ADMIN_ROLES and len(users) == 1:
+    if user["role"] in FULL_ROLES and len(users) == 1:
         space.claim_unowned(user["id"])
     return user
 
@@ -182,12 +185,35 @@ def delete(user_id):
     end_sessions(user_id)
 
 
-def can_manage(actor, target):
-    """Super admins manage everybody but other super admins; the owner manages plain users; nobody
-    blocks or deletes themselves here."""
-    if not actor or not target or actor["id"] == target["id"] or target["role"] == "superadmin":
+def can_see(actor, target):
+    """Admins see everybody except super admins; super admins and the owner see all."""
+    if not actor or not target or actor.get("role") not in ADMIN_ROLES:
         return False
-    return actor["role"] == "superadmin" or (actor["role"] == "owner" and target["role"] == "user")
+    return actor["role"] in FULL_ROLES or target["role"] != "superadmin"
+
+
+def can_manage(actor, target, action):
+    """What one account may do to another (action: password | block | logout | delete | role).
+    Super admin / owner: everything, except to super admins. Admin: password, block and log out of
+    plain users only - never delete, never another admin. Nobody does any of it to themselves."""
+    if not can_see(actor, target) or actor["id"] == target["id"] or target["role"] == "superadmin":
+        return False
+    if actor["role"] in FULL_ROLES:
+        return not (actor["role"] == "owner" and target["role"] == "owner")
+    return target["role"] == "user" and action in ("password", "block", "logout")
+
+
+def rights(actor, target):
+    return {a: can_manage(actor, target, a) for a in ACTIONS}
+
+
+def set_role(user_id, role):
+    if role not in ROLES:
+        raise AuthError("the role must be user, admin or owner")
+    user = get(user_id)
+    if not user or user["role"] == "superadmin":
+        raise AuthError("this role cannot be changed here")
+    _update(user_id, role=role)
 
 
 def list_users(query=""):

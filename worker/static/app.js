@@ -1263,12 +1263,13 @@ async function renderAccount() {
   });
 }
 
-const ROLE_NAME = { superadmin: "Super admin", owner: "Studio owner", user: "User" };
-const isAdmin = (u) => u && (u.role === "superadmin" || u.role === "owner");
+const ROLE_NAME = { superadmin: "Super admin", owner: "Studio owner", admin: "Admin", user: "User" };
+const isFullAdmin = (u) => u && (u.role === "superadmin" || u.role === "owner");
+const isAdmin = (u) => isFullAdmin(u) || (u && u.role === "admin");
 
 async function renderUsers(query = renderUsers.q || "") {
   await loadMe();
-  if (!isAdmin(me.user)) { view.innerHTML = `<div class="error-box">Only the Studio owner or a super admin sees this page.</div>`; return; }
+  if (!isAdmin(me.user)) { view.innerHTML = `<div class="error-box">Only admins see this page.</div>`; return; }
   renderUsers.q = query;
   const users = await api(`/api/users?q=${encodeURIComponent(query)}`);
   const subs = users.filter((u) => u.marketing && !u.disabled).length;
@@ -1276,7 +1277,7 @@ async function renderUsers(query = renderUsers.q || "") {
     <h1>Users</h1>
     <div class="actions users-bar">
       <input id="user-search" type="search" placeholder="Search by e-mail or ID" value="${esc(query)}">
-      <a class="btn btn-outline" href="/api/users/marketing.csv">⬇ Subscribers CSV</a>
+      ${isFullAdmin(me.user) ? `<a class="btn btn-outline" href="/api/users/marketing.csv">⬇ Subscribers CSV</a>` : ""}
     </div>
     <p class="muted small">${users.length} account(s)${query ? ` matching “${esc(query)}”` : ""} ·
       ${subs} agreed to news and offers (the CSV has only them, with the date they agreed).</p>
@@ -1286,19 +1287,22 @@ async function renderUsers(query = renderUsers.q || "") {
         <tr data-id="${esc(u.id)}">
           <td><div>${esc(u.email)}${u.disabled ? ` <span class="chip error">blocked</span>` : ""}${u.id === me.user.id ? ` <span class="chip done">you</span>` : ""}</div>
             <code class="user-id" title="Click to copy">${esc(u.id)}</code></td>
-          <td>${esc(ROLE_NAME[u.role] || u.role)}</td>
+          <td>${u.can.role ? `<select class="role-pick" data-u="role">${["user", "admin", "owner"].map((r) =>
+            `<option value="${r}" ${r === u.role ? "selected" : ""}>${ROLE_NAME[r]}</option>`).join("")}</select>`
+            : esc(ROLE_NAME[u.role] || u.role)}</td>
           <td>${u.channels.length ? u.channels.map(esc).join("<br>") : "—"}</td>
           <td>${u.marketing ? "✓ " + esc(when(u.marketing_at)) : "—"}</td>
           <td>${u.last_login ? esc(when(u.last_login)) : "—"}</td>
           <td>${u.sessions ? `${u.sessions} device(s)` : "—"}</td>
-          <td class="user-actions">${u.manageable ? `
-            <button class="btn btn-text" data-u="password">🔑 Password</button>
-            <button class="btn btn-text" data-u="logout" ${u.sessions ? "" : "disabled"}>↪ Log out</button>
-            <button class="btn btn-text" data-u="toggle">${u.disabled ? "✅ Unblock" : "⛔ Block"}</button>
-            <button class="btn btn-text btn-danger" data-u="delete">🗑 Delete</button>` : ""}</td>
+          <td class="user-actions">
+            ${u.can.password ? `<button class="btn btn-text" data-u="password">🔑 Password</button>` : ""}
+            ${u.can.logout ? `<button class="btn btn-text" data-u="logout" ${u.sessions ? "" : "disabled"}>↪ Log out</button>` : ""}
+            ${u.can.block ? `<button class="btn btn-text" data-u="toggle">${u.disabled ? "✅ Unblock" : "⛔ Block"}</button>` : ""}
+            ${u.can.delete ? `<button class="btn btn-text btn-danger" data-u="delete">🗑 Delete</button>` : ""}</td>
         </tr>`).join("") || `<tr><td colspan="7" class="muted">Nobody found.</td></tr>`}</tbody></table></div>
     <p class="muted small">People sign up themselves at <code>/login</code>. Block: they cannot sign in until unblocked.
-      Log out: ends their Studio sessions on every device. Deleting keeps their channels: they move to you.</p>`;
+      Log out: ends their Studio sessions on every device. Deleting keeps their channels: they move to you.
+      ${me.user.role === "admin" ? "As an admin you can set passwords, block and log out users - not other admins, and you cannot delete accounts." : "Admins can see users and set their passwords, block and log them out; they cannot delete accounts or touch other admins."}</p>`;
 
   let typing;
   const box = $("#user-search");
@@ -1313,9 +1317,17 @@ async function renderUsers(query = renderUsers.q || "") {
   view.querySelectorAll(".user-id").forEach((c) => c.addEventListener("click", () => {
     navigator.clipboard?.writeText(c.textContent).then(() => toast("ID copied"));
   }));
+  view.querySelectorAll(".role-pick").forEach((sel) => sel.addEventListener("change", async () => {
+    const id = sel.closest("tr").dataset.id;
+    try {
+      await api(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ role: sel.value }) });
+      toast(`Role: ${ROLE_NAME[sel.value]}`);
+    } catch (err) { toast(err.message, true); }
+    renderUsers();
+  }));
   view.querySelectorAll("tr[data-id]").forEach((row) => row.addEventListener("click", async (e) => {
     const act = e.target.dataset.u;
-    if (!act) return;
+    if (!act || act === "role") return;
     const id = row.dataset.id;
     const u = users.find((x) => x.id === id);
     const url = `/api/users/${encodeURIComponent(id)}`;

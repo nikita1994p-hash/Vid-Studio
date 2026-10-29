@@ -186,7 +186,8 @@ class ChannelEditRequest(BaseModel):
 
 class UserEditRequest(BaseModel):
     disabled: bool | None = None
-    password: str | None = None         # the owner sets a new password
+    password: str | None = None         # an admin sets a new password
+    role: str | None = None             # user | admin | owner (super admin / owner only)
 
 
 def _fail(e):
@@ -252,17 +253,23 @@ def _user(request):
     return request.state.user
 
 
-def _owner(request):
-    if not auth.is_admin(_user(request)):
-        raise HTTPException(403, "only the Studio owner or a super admin can do this")
-    return _user(request)
+def _owner(request, full=False):
+    """The signed-in admin; full=True also excludes plain admins (super admin / owner only)."""
+    user = _user(request)
+    if not auth.is_admin(user) or (full and user["role"] not in auth.FULL_ROLES):
+        raise HTTPException(403, "your role cannot do this")
+    return user
 
 
-def _managed(request, user_id):
-    """The admin, if they may change this account (not themselves, not another super admin)."""
+def _managed(request, user_id, *actions):
+    """The admin, if they may do these actions to this account; an account they may not even see is
+    answered like one that does not exist."""
     admin = _owner(request)
-    if not auth.can_manage(admin, auth.get(user_id)):
-        raise HTTPException(403, "you cannot change this account")
+    target = auth.get(user_id)
+    if not auth.can_see(admin, target):
+        raise HTTPException(404, "no such user")
+    if not all(auth.can_manage(admin, target, a) for a in actions):
+        raise HTTPException(403, "your role cannot do this to this account")
     return admin
 
 
@@ -392,18 +399,21 @@ def users(request: Request, q: str = ""):
     for c in space.all_channels():
         names.setdefault(c.get("owner"), []).append(c["name"])
     full = {u["id"]: u for u in auth._users()}
-    return [{**u, "channels": names.get(u["id"], []), "manageable": auth.can_manage(admin, full[u["id"]])}
-            for u in auth.list_users(q)]
+    return [{**u, "channels": names.get(u["id"], []), "can": auth.rights(admin, full[u["id"]])}
+            for u in auth.list_users(q) if auth.can_see(admin, full[u["id"]])]
 
 
 @app.patch("/api/users/{user_id}")
 def edit_user(user_id: str, req: UserEditRequest, request: Request):
-    _managed(request, user_id)
+    wanted = [a for a, v in (("block", req.disabled), ("password", req.password), ("role", req.role)) if v is not None]
+    _managed(request, user_id, *wanted)
     try:
         if req.disabled is not None:
             auth.set_disabled(user_id, req.disabled)
         if req.password:
             auth.set_password(user_id, req.password)
+        if req.role:
+            auth.set_role(user_id, req.role)
     except Exception as e:
         _fail(e)
     return auth.public(auth.get(user_id))
@@ -412,7 +422,7 @@ def edit_user(user_id: str, req: UserEditRequest, request: Request):
 @app.post("/api/users/{user_id}/logout")
 def logout_user(user_id: str, request: Request):
     """Sign the user out of the Studio on every device."""
-    _managed(request, user_id)
+    _managed(request, user_id, "logout")
     auth.end_sessions(user_id)
     return {"signed_out": user_id}
 
@@ -420,7 +430,7 @@ def logout_user(user_id: str, request: Request):
 @app.delete("/api/users/{user_id}")
 def delete_user(user_id: str, request: Request):
     """The account goes; its channels stay on disk and move to the admin who deleted it."""
-    owner = _managed(request, user_id)
+    owner = _managed(request, user_id, "delete")
     try:
         auth.delete(user_id)
     except Exception as e:
@@ -433,7 +443,7 @@ def delete_user(user_id: str, request: Request):
 
 @app.get("/api/users/marketing.csv")
 def marketing_list(request: Request):
-    _owner(request)
+    _owner(request, full=True)   # the mailing list stays with the super admin / owner
     return Response(auth.marketing_csv(), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=vid-studio-subscribers.csv"})
 
