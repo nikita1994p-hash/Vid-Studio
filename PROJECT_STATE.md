@@ -182,4 +182,4 @@ Built so the SaaS move later swaps storage, not logic.
 See DESIGN.md (tokens, spacing, controls, safety). Check every page with `(await import("/static/ui-audit.js")).auditAll()` at 1440 px and 375 px.
 
 ## Studio stats and marketing data
-Sign-up source (?ref= / utm_*), browser time zone + language, unsubscribe reason, plan (free / trial 14 days / pro, set by hand on Users) are stored per account. Subscribers CSV: 28 columns incl. stage and last activity. Studio stats page (#/stats, super admin / owner): funnel, active 7/30 days, sources, reasons, plans, regions, videos / uploads / sign-ups per day. Never uses YouTube API data (Limited Use).
+Sign-up source (?ref= / utm_*), browser time zone + language, unsubscribe reason, plan (free / trial 7 days / pro, set by hand on Users) are stored per account. Subscribers CSV: 28 columns incl. stage and last activity. Studio stats page (#/stats, super admin / owner): funnel, active 7/30 days, sources, reasons, plans, regions, videos / uploads / sign-ups per day. Never uses YouTube API data (Limited Use).

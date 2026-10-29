@@ -1344,7 +1344,7 @@ async function renderStats(days = renderStats.days || 30) {
 }
 
 const ROLE_NAME = { superadmin: "Super admin", owner: "Studio owner", admin: "Admin", user: "User" };
-const PLAN_NAME = { free: "Free", trial: "Trial (14 days)", pro: "Pro" };
+const PLAN_NAME = { free: "Free", trial: "Trial (7 days)", pro: "Pro" };
 const isFullAdmin = (u) => u && (u.role === "superadmin" || u.role === "owner");
 const isAdmin = (u) => isFullAdmin(u) || (u && u.role === "admin");
 
