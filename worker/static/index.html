@@ -9,7 +9,15 @@
 </head>
 <body>
   <header class="topbar">
-    <button class="icon-btn" id="menu-btn" aria-label="Menu">☰</button>
+    <div class="create-wrap">
+      <button class="icon-btn" id="menu-btn" aria-label="Menu">☰</button>
+      <div class="menu menu-left" id="user-menu" hidden>
+        <div class="menu-note" id="user-email"></div>
+        <a href="#/users" id="users-link" hidden>👥 Users</a>
+        <a href="#/account">🔑 My account</a>
+        <button data-action="logout">↪ Log out</button>
+      </div>
+    </div>
     <a class="brand" href="#/">
       <span class="logo">▶</span><span>Vid</span><span class="brand-sub">Studio</span>
     </a>
@@ -20,15 +28,6 @@
       <div class="menu" id="create-menu" hidden>
         <button data-action="new">🎬 New AI video</button>
         <button data-action="upload">⬆ Upload video</button>
-      </div>
-    </div>
-    <div class="create-wrap">
-      <button class="icon-btn user-btn" id="user-btn" aria-label="Account">●</button>
-      <div class="menu menu-right" id="user-menu" hidden>
-        <div class="menu-note" id="user-email"></div>
-        <a href="#/account">👤 My account</a>
-        <a href="#/users" id="users-link" hidden>👥 Users</a>
-        <button data-action="logout">↪ Sign out</button>
       </div>
     </div>
   </header>
@@ -47,11 +46,8 @@
     <a href="#/earnings" data-nav="earnings"><span>$</span>Earnings</a>
     <a href="#/accounts" data-nav="accounts"><span>👤</span>Accounts</a>
     <a href="#/settings" data-nav="settings"><span>⚙</span>Settings</a>
-    <a href="#/users" data-nav="users" id="nav-users" hidden><span>👥</span>Users</a>
-    <a href="#/account" data-nav="account"><span>🔑</span>My account</a>
     <div class="sidebar-foot">
       <a href="http://localhost:5678" target="_blank" rel="noopener"><span>⛓</span>Open n8n</a>
-      <a href="#" data-action="logout" class="nav-logout"><span>↪</span>Log out</a>
     </div>
   </nav>
 

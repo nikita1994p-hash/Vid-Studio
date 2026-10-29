@@ -97,7 +97,8 @@ def _send_now(text, buttons=None):
 def test():
     if not status()["configured"]:
         raise PipelineError("connect the bot first")
-    _send_now("✅ Vid Studio is connected. You will get alerts here.")
+    _send_now("✅ Vid Studio is connected. You will get alerts here.\nPress the button to check that buttons work:",
+              [[("👆 Test button", f"tst|{space.current()}")]])
     return {"sent": True}
 
 
@@ -150,18 +151,20 @@ def _bots():
 
 
 def _press(token, channels, cq):
-    """One button press: 'pub|<job>' makes the private upload public, 'del|<job>' deletes it.
-    Only the chat the alert went to may press it."""
+    """One button press: 'pub|<job>' makes the private upload public, 'del|<job>' deletes it,
+    'tst|<channel>' only answers (the test message). Only the chat the alert went to may press it."""
     import social
     action, _, job_id = (cq.get("data") or "").partition("|")
     chat = str((cq.get("message") or {}).get("chat", {}).get("id", ""))
-    cid = space.find_job(job_id)
+    cid = job_id if action == "tst" else space.find_job(job_id)
     if not cid or (cid, chat) not in channels:
         _call(token, "answerCallbackQuery", {"callback_query_id": cq["id"], "text": "Not allowed here"})
         return
     with space.use(cid):
         try:
-            if action == "pub":
+            if action == "tst":
+                done = "✅ The button works: Vid Studio got your press."
+            elif action == "pub":
                 done = "🌍 Published: " + social.youtube_make_public(job_id)
             elif action == "del":
                 social.youtube_delete(job_id)

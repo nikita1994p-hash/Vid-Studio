@@ -307,3 +307,4 @@ tr.winner td { background: #2ba64018; }
 .user-actions .btn { padding: 4px 8px; }
 .sidebar a[hidden] { display: none; }
 .role-pick { width: auto; margin-top: 0; padding: 4px 8px; }
+.menu-left { left: 0; right: auto; }

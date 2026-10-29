@@ -1132,9 +1132,7 @@ async function loadMe() {
     ? me.channels.map((c) => `<option value="${esc(c.id)}" ${c.id === me.channel ? "selected" : ""}>${esc(c.name)}</option>`).join("")
     : `<option value="">No channel yet</option>`;
   $("#user-email").textContent = me.user.email;
-  $("#user-btn").textContent = (me.user.email[0] || "●").toUpperCase();
   $("#users-link").hidden = !isAdmin(me.user);
-  $("#nav-users").hidden = !isAdmin(me.user);
 }
 
 $("#channel-pick").addEventListener("change", async (e) => {
@@ -1458,8 +1456,14 @@ $("#upload-form").querySelector("[value=cancel]").addEventListener("click", () =
 
 // ------------------------------------------------------------------ wiring
 
-$("#create-btn").addEventListener("click", (e) => { e.stopPropagation(); $("#create-menu").hidden = !$("#create-menu").hidden; });
-$("#user-btn").addEventListener("click", (e) => { e.stopPropagation(); $("#user-menu").hidden = !$("#user-menu").hidden; });
+$("#create-btn").addEventListener("click", (e) => { e.stopPropagation(); $("#user-menu").hidden = true; $("#create-menu").hidden = !$("#create-menu").hidden; });
+// ☰: the account menu (Users, My account, Log out); on a narrow screen it also slides the sidebar in
+$("#menu-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("#create-menu").hidden = true;
+  $("#user-menu").hidden = !$("#user-menu").hidden;
+  if (window.matchMedia("(max-width: 900px)").matches) document.body.classList.toggle("nav-open");
+});
 document.addEventListener("click", async (e) => {
   const act = e.target.closest("[data-action]");
   if (act) {
@@ -1479,7 +1483,6 @@ document.addEventListener("click", async (e) => {
   const row = e.target.closest("tr[data-href]");
   if (row && !e.target.closest("a")) location.hash = row.dataset.href;
 });
-$("#menu-btn").addEventListener("click", () => document.body.classList.toggle("nav-open"));
 window.addEventListener("hashchange", () => { document.body.classList.remove("nav-open"); route(); });
 
 loadMe().catch(() => {}).then(loadHealth).then(route);
