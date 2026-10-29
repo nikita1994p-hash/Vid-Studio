@@ -478,17 +478,25 @@ def _youtube_call(method, url, **kw):
         raise
 
 
-def youtube_make_public(job_id):
-    """The Telegram 'Publish' button: a private upload goes public now."""
+def youtube_set_mode(job_id, mode):
+    """Change who sees a video that is already on YouTube (private | schedule | public | auto) -
+    never a second upload: a duplicate splits the views and its cover is refused."""
     vid = _uploaded_id(job_id)
     acct = _token("youtube")
+    status = pipeline.youtube_status(mode)
     _youtube_call("PUT", "https://www.googleapis.com/youtube/v3/videos", params={"part": "status"},
-                  json_body={"id": vid, "status": pipeline.youtube_status("public")},
+                  json_body={"id": vid, "status": status},
                   headers={"Authorization": f"Bearer {acct['access_token']}"})
+    shown = "scheduled" if status.get("publishAt") else status["privacyStatus"]
     job = pipeline.Job(job_id)
-    job.status["youtube"] = {**job.status.get("youtube", {}), "mode": "public", "published_at": pipeline._now()}
-    job.stage("youtube", "done", "public")
+    job.status["youtube"] = {**job.status.get("youtube", {}), "mode": shown, "changed_at": pipeline._now()}
+    job.stage("youtube", "done", shown)
     return f"https://youtube.com/shorts/{vid}"
+
+
+def youtube_make_public(job_id):
+    """The Telegram 'Publish' button: a private upload goes public now."""
+    return youtube_set_mode(job_id, "public")
 
 
 def youtube_delete(job_id):
@@ -655,6 +663,13 @@ def post(platform, job_id, mode="auto"):
         _mark(job_id, platform, state="error", mode=mode, error=str(e)[:500])
         raise
     who = (acct.get("profile") or {}).get("name")
+    if platform == "youtube" and (data["status"].get("youtube") or {}).get("video_id"):
+        # already on YouTube: change its privacy instead of uploading a duplicate
+        url = youtube_set_mode(job_id, mode)
+        _mark(job_id, platform, state="posted", mode=mode, url=url, id=_uploaded_id(job_id), account=who,
+              note="already uploaded - privacy changed, no second upload")
+        return {"platform": platform, "name": p["name"], "url": url, "id": _uploaded_id(job_id),
+                "note": "privacy changed"}
     _mark(job_id, platform, state="uploading", mode=mode, account=who)
     try:
         video = (pipeline.job_dir(job_id) / "final.mp4").read_bytes()
