@@ -450,14 +450,18 @@ def _post_youtube(acct, job_id, video, result, mode):
     pipeline.mark_uploaded(job_id, vid, mode)
     note = None
     cover = _cover(job_id)
-    if cover:
-        try:  # custom thumbnails need a phone-verified channel; the video is up either way
+    # custom thumbnails need a phone-verified channel; right after the upload YouTube often refuses
+    # with 403 "can't be set" while it is still processing - the same request works a few minutes later
+    for wait in ((0, 30, 60, 120, 180) if cover else ()):
+        time.sleep(wait)
+        try:
             _call("POST", "https://www.googleapis.com/upload/youtube/v3/thumbnails/set",
                   params={"videoId": vid, "uploadType": "media"}, body=cover,
                   headers={**bearer, "Content-Type": "image/jpeg"})
             note = "cover set"
+            break
         except Exception as e:
-            note = f"cover not set: {str(e)[:200]}"
+            note = f"cover not set (tried for 6 min): {str(e)[:120]}"
     return {"url": f"https://youtube.com/shorts/{vid}", "id": vid, "note": note}
 
 
