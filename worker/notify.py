@@ -168,7 +168,7 @@ def broadcast(event, text):
 
 
 on_variants = None   # app.start_variants(job_id, count): set by app.py, which owns the "one video at a time" lock
-COMMANDS = [("menu", "Last video: A/B versions, upload, publish")]
+COMMANDS = [("menu", "Last video: make versions, upload, publish")]
 
 
 def _last_video():
@@ -195,20 +195,27 @@ def menu(cid):
         if not last:
             return f"🎛 {name}\nNo finished video yet.", [[("🔄 Refresh", f"mnu|{cid}")]]
         job = last["job_id"]
-        versions = sorted(j["variant"] for j in pipeline.list_jobs()
-                          if j["variant"] not in (None, "A") and j["state"] == "done"
-                          and (pipeline._read_json(pipeline.job_dir(j["job_id"]) / "status.json") or {}).get("variant_of") == job)
+        versions = sorted((j for j in pipeline.list_jobs()
+                           if j["variant"] not in (None, "A") and j["state"] == "done"
+                           and (pipeline._read_json(pipeline.job_dir(j["job_id"]) / "status.json") or {}).get("variant_of") == job),
+                          key=lambda j: j["variant"])
         yt = last.get("youtube") or {}
-        lines = [f"🎛 {name}", f"Last video: “{last['title']}”", _youtube_line(yt),
-                 "A/B versions: " + (", ".join(versions) if versions else "none yet"), link(job)]
+        lines = [f"🎛 {name}", "", f"Last video (A): “{last['title']}”", _youtube_line(yt), link(job), ""]
+        for v in versions:
+            lines.append(f"Version {v['variant']}: “{v['title']}” — " + _youtube_line(v.get("youtube") or {}))
+        lines.append("A version = the same video with another hook, title, voice, music"
+                     + (" and pictures" if pipeline.flag("VARIANT_NEW_IMAGES", "true") else "")
+                     + ". Post both and after a few days the Studio tells you which one people watch more.")
         if pipeline.flag("VARIANT_NEW_IMAGES", "true"):
-            lines.append("Each version draws its own pictures: about 1/10 of the free daily FLUX limit.")
-        rows = [[("🅱 +1 A/B version", f"ab1|{job}"), ("🅱 +2 versions", f"ab2|{job}")]]
-        if not yt.get("video_id") and yt.get("state") not in ("queued", "uploading"):
-            rows.append([("📤 Upload to YouTube (private)", f"upl|{job}")])
-        elif yt.get("video_id") and (yt.get("mode") or "private") == "private":
-            rows.append([("🌍 Publish now", f"pub|{job}")])
-        rows.append([("🔄 Refresh", f"mnu|{cid}")])
+            lines.append("Each version uses about 1/10 of the free daily picture limit.")
+        rows = [[("🅱 Make 1 new version", f"ab1|{job}")], [("🅱 Make 2 new versions", f"ab2|{job}")]]
+        for v, vyt in [("A", yt)] + [(v["variant"], v.get("youtube") or {}) for v in versions]:
+            vid = job if v == "A" else next(x["job_id"] for x in versions if x["variant"] == v)
+            if not vyt.get("video_id") and vyt.get("state") not in ("queued", "uploading"):
+                rows.append([(f"📤 Upload version {v} to YouTube (private)", f"upl|{vid}")])
+            elif vyt.get("video_id") and (vyt.get("mode") or "private") == "private":
+                rows.append([(f"🌍 Make version {v} public", f"pub|{vid}")])
+        rows.append([("🔄 Update this card", f"mnu|{cid}")])
         return "\n".join(lines), rows
 
 

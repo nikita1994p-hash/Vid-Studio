@@ -2266,7 +2266,7 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
         notify.send("done", f"✅ Ready: {title} ({seconds:.0f} s)"
                             + (f"\n⚠ {doubts} doubtful figure(s) — check the Script tab before posting" if doubts > 0 else "")
                             + f"\n{notify.link(job.id)}",
-                    buttons=[[("🅱 Make an A/B version", f"ab1|{job.id}")]])
+                    buttons=[[("🅱 Make a 2nd version (A/B test)",f"ab1|{job.id}")]])
     return result
 
 
@@ -2353,7 +2353,7 @@ def make_variants(base_id, count, on_start=None):
         notify.send("done", f"✅ {len(made)} more version(s) of “{result.get('title')}” ready: "
                             + ", ".join(m["variant"] for m in made) + f"\n{notify.link(base_id)}"
                             + "\nUpload privately first, then publish from the next message:",
-                    buttons=[[(f"📤 Upload {m['variant']} to YouTube", f"upl|{m['job_id']}")] for m in made])
+                    buttons=[[(f"📤 Upload version {m['variant']} to YouTube (private)",f"upl|{m['job_id']}")] for m in made])
     return made
 
 
