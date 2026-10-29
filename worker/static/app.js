@@ -479,7 +479,7 @@ function fieldInput(f, value, blank = null) {
   if (f.type === "bool") {
     if (blank !== null) return `<select ${nm}><option value="">${esc(blank)}</option>
       <option value="true" ${v === "true" ? "selected" : ""}>on</option><option value="false" ${v === "false" ? "selected" : ""}>off</option></select>`;
-    return `<label class="check" style="margin:0"><input type="checkbox" ${nm} ${v === "true" ? "checked" : ""}> on</label>`;
+    return `<label class="check" style="margin:0"><input type="checkbox" ${nm} ${v === "true" ? "checked" : ""}></label>`;
   }
   if (f.type === "select") {
     const opts = [...(blank !== null ? [""] : []), ...(f.options || [])];
