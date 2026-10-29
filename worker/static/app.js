@@ -26,7 +26,8 @@ async function api(path, opts = {}) {
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (res.status === 401) { location.href = "/login"; throw new Error("sign in first"); }
-  if (res.status === 409 && data && data.detail === "create a channel first" && !location.hash.startsWith("#/channels")) {
+  if (res.status === 409 && data && data.detail === "create a channel first" && !location.hash.startsWith("#/channels")
+      && (!me || hasAccess())) {   // without a plan there is no channel to create: stay on the welcome screen
     location.hash = "#/channels";
   }
   if (!res.ok) throw new Error((data && typeof data.detail === "string" && data.detail) || `${res.status} ${res.statusText}`);
@@ -94,6 +95,7 @@ function poll(fn, ms) {
 async function renderDashboard() {
   const jobs = await api("/api/jobs");
   const active = jobs.find((j) => j.state === "running" || j.state === "queued");
+  if (!active) await loadMe().catch(() => {});   // fresh "videos left" line
   const done = jobs.filter((j) => j.state === "done");
   const uploaded = jobs.filter((j) => j.youtube?.state === "uploaded");
   const month = new Date().toISOString().slice(0, 7);
@@ -111,7 +113,8 @@ async function renderDashboard() {
             <div class="muted">${when(active.created)} ${active.mock ? '<span class="chip test">TEST</span>' : ""}</div></div></div>
           <div id="active-stepper"></div>`
         : `<div class="empty">Nothing is being made right now.<br><br>
-            <button class="btn btn-primary" data-action="new">Create a video</button></div>`}
+            <button class="btn btn-primary" data-action="new">Create a video</button>
+            ${quotaLine(me?.access) ? `<p class="muted small" style="margin-top:14px">${esc(quotaLine(me.access))}</p>` : ""}</div>`}
       </section>
       <section class="card">
         <h2>Channel analytics</h2>
@@ -1103,7 +1106,10 @@ async function route() {
   document.querySelectorAll("[data-nav]").forEach((a) =>
     a.classList.toggle("active", a.dataset.nav === (page || "dashboard") || (page === "video" && a.dataset.nav === "content")));
   try {
-    if (page === "content") await renderContent();
+    // no plan: own videos stay viewable, everything else shows the welcome screen
+    if (me && !hasAccess() && !["account", "users", "stats"].includes(page)
+        && !(me.channel && ["content", "video"].includes(page))) renderNoPlan();
+    else if (page === "content") await renderContent();
     else if (page === "video" && id) await renderVideo(decodeURIComponent(id));
     else if (page === "settings") await renderSettings();
     else if (page === "accounts") await renderAccounts(query);
@@ -1135,6 +1141,9 @@ async function loadMe() {
   $("#user-email").textContent = me.user.email;
   $("#users-link").hidden = !isAdmin(me.user);
   $("#stats-link").hidden = !isFullAdmin(me.user);
+  $("#create-btn").closest(".create-wrap").hidden = !hasAccess();
+  $("#mode-pill").hidden = !isAdmin(me.user);                       // live/test mode and n8n are the admin's business
+  document.querySelector(".sidebar-foot").hidden = !isFullAdmin(me.user);
 }
 
 $("#channel-pick").addEventListener("change", async (e) => {
@@ -1240,7 +1249,7 @@ async function renderAccount() {
   view.innerHTML = `
     <h1>My account</h1>
     <div class="card"><h2>${esc(u.email)}</h2>
-      <p class="muted">${esc(ROLE_NAME[u.role] || "User")} · ${esc(PLAN_NAME[u.plan] || "Free")} plan${u.trial_until ? ` until ${esc(u.trial_until)}` : ""} · since ${esc(when(u.created))}</p>
+      <p class="muted">${esc(ROLE_NAME[u.role] || "User")} · ${u.role === "user" ? esc(PLAN_NAME[u.plan]) + " plan" : "no limits"}${u.plan === "trial" && u.trial_until ? ` until ${esc(u.trial_until)}` : ""} · since ${esc(when(u.created))}</p>
       <label class="check"><input type="checkbox" id="acc-marketing" ${u.marketing ? "checked" : ""}>
         Send me news, tips and offers about Vid Studio by e-mail</label>
       <div class="unsub" id="unsub" hidden>
@@ -1343,8 +1352,66 @@ async function renderStats(days = renderStats.days || 30) {
   view.querySelectorAll("[data-days]").forEach((b) => b.addEventListener("click", () => renderStats(+b.dataset.days)));
 }
 
+const inviteLink = (code) => `${location.origin}/login?invite=${encodeURIComponent(code)}&ref=invite`;
+
+async function loadInvites() {
+  const list = await api("/api/invites").catch(() => []);
+  const box = $("#invite-list");
+  if (!box) return;
+  box.innerHTML = list.length ? `<table class="compact users-table"><thead><tr><th>Plan</th><th>Link</th><th>Uses left</th>
+      <th>Valid until</th><th>Used by</th><th></th></tr></thead><tbody>${list.map((i) => `
+      <tr data-code="${esc(i.code)}"><td>${esc(PLAN_NAME[i.plan])}${i.note ? `<div class="muted small">${esc(i.note)}</div>` : ""}</td>
+        <td><code class="user-id" data-copy="${esc(inviteLink(i.code))}" title="Click to copy">${esc(inviteLink(i.code))}</code></td>
+        <td>${num(i.uses_left)}</td><td>${esc(i.expires)}</td>
+        <td>${i.used_by.length ? i.used_by.map((u) => esc(u.email)).join("<br>") : "—"}</td>
+        <td><button class="btn btn-text btn-danger" data-revoke>Revoke</button></td></tr>`).join("")}</tbody></table>`
+    : `<div class="empty">No invite links yet.</div>`;
+  box.querySelectorAll("[data-copy]").forEach((c) => c.addEventListener("click", () =>
+    navigator.clipboard?.writeText(c.dataset.copy).then(() => toast("Link copied"))));
+  box.querySelectorAll("[data-revoke]").forEach((b) => b.addEventListener("click", async () => {
+    if (!confirm("Revoke this invite link? Nobody can sign up with it any more (accounts made with it keep their plan).")) return;
+    await api(`/api/invites/${encodeURIComponent(b.closest("tr").dataset.code)}`, { method: "DELETE" }).catch((e) => toast(e.message, true));
+    loadInvites();
+  }));
+}
+
+document.addEventListener("submit", async (e) => {
+  if (e.target.id !== "invite-form") return;
+  e.preventDefault();
+  const f = e.target;
+  try {
+    const inv = await api("/api/invites", { method: "POST", body: JSON.stringify({
+      plan: f.plan.value, uses: +f.uses.value || 1, days: +f.days.value || 14, note: f.note.value }) });
+    navigator.clipboard?.writeText(inviteLink(inv.code)).catch(() => {});
+    toast("Invite link created and copied");
+    f.note.value = "";
+    loadInvites();
+  } catch (err) { toast(err.message, true); }
+});
+
 const ROLE_NAME = { superadmin: "Super admin", owner: "Studio owner", admin: "Admin", user: "User" };
-const PLAN_NAME = { free: "Free", trial: "Trial (7 days)", pro: "Pro" };
+const PLAN_NAME = new Proxy({}, { get: (_, k) => (me?.plan_names || {})[k] || k });
+
+// what this account may make now, as one line ("Trial · 1 of 1 video left in 24 h")
+function quotaLine(a) {
+  if (!a || a.unlimited) return "";
+  if (!a.active) return "No plan yet - no videos";
+  const next = a.next_at ? ` · next from ${when(a.next_at)}` : "";
+  return `${a.label}${a.trial_until ? ` until ${a.trial_until}` : ""} · ${a.left} of ${a.videos_per_day} video(s) left in 24 h${next}`;
+}
+
+const hasAccess = () => !!(me && (me.access.unlimited || me.access.active));
+
+function renderNoPlan() {
+  view.innerHTML = `<div class="no-plan">
+    <h1>Welcome to Vid Studio</h1>
+    <section class="card"><h2>Your account has no plan yet</h2>
+      <p class="muted">With a plan the Studio makes and posts a YouTube Short for you every day. A trial is switched on
+        by the Studio admin; plans with payments open soon.</p>
+      <div class="actions"><a class="btn btn-primary" href="/pricing">See the plans</a>
+        <a class="btn btn-outline" href="#/account">My account</a></div>
+    </section></div>`;
+}
 const isFullAdmin = (u) => u && (u.role === "superadmin" || u.role === "owner");
 const isAdmin = (u) => isFullAdmin(u) || (u && u.role === "admin");
 
@@ -1374,7 +1441,7 @@ async function renderUsers(query = renderUsers.q || "") {
             : esc(ROLE_NAME[u.role] || u.role)}</td>
           <td>${u.can.plan ? `<select class="role-pick" data-u="plan">${me.plans.map((p) =>
             `<option value="${p}" ${p === u.plan ? "selected" : ""}>${PLAN_NAME[p] || p}</option>`).join("")}</select>`
-            : esc(PLAN_NAME[u.plan] || u.plan)}${u.trial_until ? `<div class="muted small">until ${esc(u.trial_until)}</div>` : ""}</td>
+            : u.role === "user" ? esc(PLAN_NAME[u.plan]) : `<span class="muted">No limit</span>`}${u.plan === "trial" && u.trial_until ? `<div class="muted small">until ${esc(u.trial_until)}</div>` : ""}</td>
           <td>${esc(u.source)}${u.timezone ? `<div class="muted small">${esc(u.timezone)}</div>` : ""}</td>
           <td>${u.channels.length ? u.channels.map(esc).join("<br>") : "—"}</td>
           <td>${u.marketing ? "✓ " + esc(when(u.marketing_at)) : "—"}</td>
@@ -1386,10 +1453,23 @@ async function renderUsers(query = renderUsers.q || "") {
             ${u.can.block ? `<button class="btn btn-text" data-u="toggle">${u.disabled ? "✅ Unblock" : "⛔ Block"}</button>` : ""}
             ${u.can.delete ? `<button class="btn btn-text btn-danger" data-u="delete">🗑 Delete</button>` : ""}</td>
         </tr>`).join("") || `<tr><td colspan="9" class="muted">Nobody found.</td></tr>`}</tbody></table></div>
+    ${isFullAdmin(me.user) ? `<section class="card" id="invites"><h2>Invite links</h2>
+      <p class="muted small">Anyone can create an account, but it starts with no plan. An invite link gives the plan you
+        pick here - share it with the people you want to let in.</p>
+      <form class="actions" id="invite-form">
+        <select name="plan">${me.plans.filter((p) => p !== "none").map((p) => `<option value="${p}">${esc(PLAN_NAME[p])}</option>`).join("")}</select>
+        <label class="inline">Uses <input name="uses" type="number" min="1" max="500" value="1"></label>
+        <label class="inline">Days valid <input name="days" type="number" min="1" max="365" value="14"></label>
+        <input name="note" placeholder="Note, e.g. Telegram group" maxlength="60">
+        <button class="btn btn-primary">Create link</button>
+      </form>
+      <div id="invite-list"><div class="empty">Loading…</div></div>
+    </section>` : ""}
     <p class="muted small">People sign up themselves at <code>/login</code>. Block: they cannot sign in until unblocked.
       Log out: ends their Studio sessions on every device. Deleting keeps their channels: they move to you.
       ${me.user.role === "admin" ? "As an admin you can set passwords, block and log out users - not other admins, and you cannot delete accounts." : "Admins can see users and set their passwords, block and log them out; they cannot delete accounts or touch other admins."}</p>`;
 
+  if (isFullAdmin(me.user)) loadInvites();
   let typing;
   const box = $("#user-search");
   box.addEventListener("input", () => {
@@ -1468,12 +1548,15 @@ let newFields = [];
 
 async function openNew() {
   const f = $("#new-form");
+  await loadMe().catch(() => {});
   f.reset();
   try { health = await api("/api/health"); } catch { /* keep the last known settings */ }
   const hint = $("#next-part-hint");
   const next = health?.next_part || (health?.next_topic && `“${health.next_topic}” (next in Topics)`);
   hint.hidden = !next;
   hint.textContent = next ? `With an empty topic this makes ${next}.` : "";
+  $("#quota-hint").textContent = quotaLine(me?.access);
+  $("#quota-hint").hidden = !quotaLine(me?.access);
   f.mock.checked = !!health?.mock;
   f.video.checked = !!health?.use_video_hook;
   try {

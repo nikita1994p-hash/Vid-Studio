@@ -422,10 +422,12 @@ def _cover(job_id):
     return path.read_bytes() if flag("COVERS", "true") and path.exists() else None
 
 
-def _public_video_url(job_id):
+def _public_video_url(job_id, name="final.mp4"):
+    """A signed link the platform can fetch without signing in (one file, 24 hours)."""
+    import auth
     if not env("PUBLIC_BASE_URL"):
         return None
-    return f"{env('PUBLIC_BASE_URL').rstrip('/')}/files/{job_id}/final.mp4"
+    return f"{env('PUBLIC_BASE_URL').rstrip('/')}/files/{job_id}/{name}?{auth.sign_file(job_id, name)}"
 
 
 def _post_youtube(acct, job_id, video, result, mode):
@@ -551,7 +553,7 @@ def _post_instagram(acct, job_id, video, result, mode):
     params = {"media_type": "REELS", "caption": _caption(result, 2200), "access_token": t}
     public = _public_video_url(job_id)
     if public and _cover(job_id):  # Instagram fetches the cover from a link, so it needs PUBLIC_BASE_URL too
-        params["cover_url"] = public.rsplit("/", 1)[0] + "/cover.jpg"
+        params["cover_url"] = _public_video_url(job_id, "cover.jpg")
     if public:
         params["video_url"] = public
         container = _call("POST", f"{IG_GRAPH}/{uid}/media", params=params)

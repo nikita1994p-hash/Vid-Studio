@@ -242,6 +242,36 @@ def _upload(job_id):
     return "📤 Uploading privately… the Publish button comes in the next message"
 
 
+def _admin_channels():
+    """Channels whose owner is a super admin / Studio owner: where account alerts and their buttons go."""
+    import auth
+    out = []
+    for cid in space.list_ids():
+        owner = auth.get(space.get(cid).get("owner") or "")
+        if owner and owner.get("role") in auth.FULL_ROLES:
+            out.append(cid)
+    return out
+
+
+def new_account(user, source):
+    """Someone signed up: tell the admins, with a button that gives a trial (never blocks sign-up)."""
+    import plans
+    try:
+        plan = plans.name(user)
+        text = (f"🆕 New Vid Studio account: {user['email']}\nfrom: {source} · plan: {plans.PLANS[plan]['label']}"
+                + (" (invite)" if user.get("invite") else "")
+                + ("\n✉ agreed to news and offers" if user.get("marketing") else ""))
+        buttons = None if plan != "none" else [[(f"🎁 Give a {plans.PLANS['trial']['days']}-day trial", f"trl|{user['id']}")]]
+        sent = set()
+        for cid in _admin_channels():
+            with space.use(cid):
+                c = _config()
+                if c.get("bot_token") and (c["bot_token"], c.get("chat_id")) not in sent and send("account", text, buttons):
+                    sent.add((c["bot_token"], c.get("chat_id")))
+    except Exception as e:
+        print(f"[warn] sign-up alert: {e}", flush=True)
+
+
 def _press(token, channels, cq):
     """One button press. 'pub|<job>' makes the private upload public, 'del|<job>' deletes it,
     'upl|<job>' uploads it privately, 'ab1|<job>' / 'ab2|<job>' make A/B versions,
@@ -250,7 +280,11 @@ def _press(token, channels, cq):
     import social
     action, _, arg = (cq.get("data") or "").partition("|")
     chat = str((cq.get("message") or {}).get("chat", {}).get("id", ""))
-    cid = arg if action in ("tst", "mnu") else space.find_job(arg)
+    if action == "trl":   # 'give a trial' on a sign-up alert: only from an admin's own channel chat
+        admin = set(_admin_channels())
+        cid = next((c for c, ch in channels if ch == chat and c in admin), None)
+    else:
+        cid = arg if action in ("tst", "mnu") else space.find_job(arg)
     if not cid or (cid, chat) not in channels:
         _call(token, "answerCallbackQuery", {"callback_query_id": cq["id"], "text": "Not allowed here"})
         return
@@ -275,6 +309,14 @@ def _press(token, channels, cq):
                 done = "🗑 Deleted from YouTube (the video stays in the Studio)"
             elif action == "upl":
                 done = _upload(arg)
+            elif action == "trl":
+                import auth
+                import plans
+                target = auth.get(arg)
+                if not target or target.get("role") != "user":
+                    raise PipelineError("no such account, or it is an admin")
+                auth.set_plan(arg, "trial")
+                done = f"🎁 Trial given to {target['email']} until {plans.trial_until()}"
             elif action in ("ab1", "ab2"):
                 if not on_variants:
                     raise PipelineError("the Studio is still starting - try again in a minute")

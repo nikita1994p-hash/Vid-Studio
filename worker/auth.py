@@ -14,6 +14,7 @@ import threading
 import os
 import time
 
+import plans
 import space
 
 # Super admins see and control every account (SUPERADMIN_EMAILS in .env, comma separated). The first
@@ -23,10 +24,9 @@ FULL_ROLES = ("superadmin", "owner")         # every action on every account (bu
 ADMIN_ROLES = FULL_ROLES + ("admin",)       # may open the Users page
 ROLES = ("user", "admin", "owner")          # what a full admin may give; superadmin comes only from .env
 ACTIONS = ("password", "block", "logout", "delete", "role", "plan")
-PLANS = ("free", "trial", "pro")          # SaaS prep: no payments yet, the super admin sets it by hand
-TRIAL_DAYS = 7
 UNSUBSCRIBE_REASONS = ("too many e-mails", "not useful", "I stopped using Vid Studio", "never signed up for it", "other")
-SOURCE_KEYS = ("ref", "utm_source", "utm_medium", "utm_campaign", "referrer", "landing")
+SOURCE_KEYS = ("ref", "utm_source", "utm_medium", "utm_campaign", "referrer", "landing", "wanted_plan")
+INVITES = space.ROOT / "invites.json"
 USERS = space.ROOT / "users.json"
 SESSIONS = space.ROOT / "sessions.json"
 SESSION_DAYS = 30
@@ -89,7 +89,7 @@ def public(user):
     """What the browser may see about a user."""
     return {k: user.get(k) for k in ("id", "email", "role", "marketing", "marketing_at", "created",
                                       "last_login", "disabled", "plan", "trial_until", "timezone", "language")} | {
-        "plan": user.get("plan") or "free", "source": source_label(user), "sessions": active_sessions(user["id"])}
+        "plan": plans.name(user), "source": source_label(user), "sessions": active_sessions(user["id"])}
 
 
 def _clean(value, size=100):
@@ -122,21 +122,24 @@ def has_users():
     return bool(_users())
 
 
-def register(email, password, marketing=False, source=None, timezone=None, language=None):
+def register(email, password, marketing=False, source=None, timezone=None, language=None, invite=None):
     """A new account. The very first one is the owner and takes over the channels made before
     accounts existed. marketing: the separate, optional 'news and offers' tick box.
-    source: where they came from (?ref= / utm_* of the sign-up link, the referring site)."""
+    source: where they came from (?ref= / utm_* of the sign-up link, the referring site).
+    invite: an invite code - the account starts with the plan the invite gives; without one it has no plan."""
     email = _email(email)
     _check_password(password)
     with _lock:
         users = _users()
         if any(u["email"] == email for u in users):
             raise AuthError("this e-mail already has an account - sign in instead")
+        plan = _use_invite(invite, email) if invite else "none"
         user = {"id": secrets.token_hex(8), "email": email, "password": _hash(password),
                 "role": "superadmin" if email in SUPERADMINS else "owner" if not users else "user",
                 "created": _now(), "last_login": None,
                 "marketing": bool(marketing), "marketing_at": _now() if marketing else None,
-                "disabled": False, "plan": "free", "trial_until": None,
+                "disabled": False, "plan": plan, "trial_until": plans.trial_until() if plan == "trial" else None,
+                "invite": invite if plan != "none" else None,
                 "source": {k: _clean(v, 300) for k, v in (source or {}).items() if k in SOURCE_KEYS and v},
                 **_locale(timezone, language)}
         users.append(user)
@@ -206,11 +209,87 @@ def set_marketing(user_id, on, reason=None):
 
 
 def set_plan(user_id, plan):
-    """free | trial (TRIAL_DAYS from today) | pro. Payments come later; until then the super admin sets it."""
-    if plan not in PLANS:
-        raise AuthError("the plan must be free, trial or pro")
-    until = time.strftime("%Y-%m-%d", time.gmtime(time.time() + TRIAL_DAYS * 86400)) if plan == "trial" else None
-    _update(user_id, plan=plan, trial_until=until)
+    """none | trial (plans.PLANS days from today) | standard | pro. Payments come later; until then an admin sets it."""
+    if plan not in plans.GRANTABLE:
+        raise AuthError("unknown plan")
+    return _update(user_id, plan=plan, trial_until=plans.trial_until() if plan == "trial" else None)
+
+
+# ------------------------------------------------------------------ signed file links
+
+SECRET_FILE = space.ROOT / "secret.key"   # made on first use, never leaves /data
+
+
+def _secret():
+    if not SECRET_FILE.exists():
+        SECRET_FILE.write_text(secrets.token_hex(32), encoding="utf-8")
+    return SECRET_FILE.read_text(encoding="utf-8").strip().encode()
+
+
+def _file_sig(job_id, name, exp):
+    return hmac.new(_secret(), f"{job_id}/{name}/{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def sign_file(job_id, name, hours=24):
+    """A query string that lets a platform (Instagram, Threads) fetch one file of one video without
+    signing in, for `hours` hours. Every other file needs a session."""
+    exp = int(time.time()) + hours * 3600
+    return f"exp={exp}&sig={_file_sig(job_id, name, exp)}"
+
+
+def file_signed(job_id, name, exp, sig):
+    try:
+        exp = int(exp)
+    except (TypeError, ValueError):
+        return False
+    return exp >= time.time() and hmac.compare_digest(_file_sig(job_id, name, exp), sig or "")
+
+
+# ------------------------------------------------------------------ invites
+
+def _invites():
+    return space._read(INVITES, []) or []
+
+
+def create_invite(created_by, plan, uses=1, days=14, note=""):
+    """A sign-up link that gives a plan: uses = how many accounts may use it, days = how long it works."""
+    if plan not in plans.GRANTABLE or plan == "none":
+        raise AuthError("an invite gives trial, standard or pro")
+    invite = {"code": secrets.token_urlsafe(9), "plan": plan, "uses_left": max(1, min(500, int(uses))),
+              "expires": time.strftime("%Y-%m-%d", time.gmtime(time.time() + max(1, min(365, int(days))) * 86400)),
+              "note": _clean(note, 60), "created_by": created_by, "created": _now(), "used_by": []}
+    with _lock:
+        space._write(INVITES, _invites() + [invite])
+    return invite
+
+
+def invite_info(code):
+    """What the sign-up page may show about an invite (None when it does not work any more)."""
+    inv = next((i for i in _invites() if i["code"] == code), None)
+    if not inv or inv["uses_left"] < 1 or inv["expires"] < time.strftime("%Y-%m-%d", time.gmtime()):
+        return None
+    return {"plan": inv["plan"], "label": plans.PLANS[inv["plan"]]["label"]}
+
+
+def _use_invite(code, email):
+    """Called under _lock by register(): spends one use and returns the plan it gives."""
+    if not invite_info(code):
+        raise AuthError("this invite link has expired or was already used - ask for a new one")
+    invites = _invites()
+    inv = next(i for i in invites if i["code"] == code)
+    inv["uses_left"] -= 1
+    inv["used_by"].append({"email": email, "at": _now()})
+    space._write(INVITES, invites)
+    return inv["plan"]
+
+
+def list_invites():
+    return sorted(_invites(), key=lambda i: i["created"], reverse=True)
+
+
+def revoke_invite(code):
+    with _lock:
+        space._write(INVITES, [i for i in _invites() if i["code"] != code])
 
 
 def set_disabled(user_id, off):
@@ -242,15 +321,13 @@ def can_see(actor, target):
 
 def can_manage(actor, target, action):
     """What one account may do to another (action: password | block | logout | delete | role).
-    Super admin / owner: everything, except to super admins. Admin: password, block and log out of
-    plain users only - never delete, never another admin. Nobody does any of it to themselves."""
+    Super admin / owner: everything, except to super admins. Admin: password, block, log out and plan
+    of plain users only - never delete, never another admin. Nobody does any of it to themselves."""
     if not can_see(actor, target) or actor["id"] == target["id"] or target["role"] == "superadmin":
         return False
     if actor["role"] in FULL_ROLES:
         return not (actor["role"] == "owner" and target["role"] == "owner")
-    if action == "plan":
-        return False
-    return target["role"] == "user" and action in ("password", "block", "logout")
+    return target["role"] == "user" and action in ("password", "block", "logout", "plan")
 
 
 def rights(actor, target):
@@ -283,8 +360,9 @@ def marketing_csv(usage=None):
                          "consent_at": u.get("marketing_at") or "", "signed_up": u.get("created") or "",
                          "last_login": u.get("last_login") or "", "source": source_label(u),
                          "utm_campaign": (u.get("source") or {}).get("utm_campaign") or "",
+                         "wanted_plan": (u.get("source") or {}).get("wanted_plan") or "",
                          "timezone": u.get("timezone") or "", "language": u.get("language") or "",
-                         "plan": u.get("plan") or "free", "trial_until": u.get("trial_until") or "",
+                         "plan": plans.name(u), "trial_until": u.get("trial_until") or "",
                          **(usage(u["id"]) if usage else {})})
     out = io.StringIO()
     columns = list(rows[0]) if rows else ["email", "user_id", "role", "consent_at", "signed_up", "last_login"]

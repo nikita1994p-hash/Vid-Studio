@@ -9,7 +9,9 @@
 import datetime
 import hmac
 import json
+import socket
 import threading
+import time
 import traceback
 import urllib.error
 import urllib.parse
@@ -27,6 +29,7 @@ import earnings
 import niches
 import notify
 import pipeline
+import plans
 import social
 import space
 import topics
@@ -191,6 +194,7 @@ class SignUpRequest(BaseModel):
     email: str
     password: str
     marketing: bool = False             # the separate 'news and offers' tick box, off by default
+    invite: str | None = None           # an invite link's code: the account starts with that plan
     source: dict | None = None          # ?ref= / utm_* of the sign-up link and the referring site
     timezone: str | None = None         # the browser's own time zone and language
     language: str | None = None
@@ -223,6 +227,13 @@ class ChannelEditRequest(BaseModel):
     daily: bool | None = None
 
 
+class InviteRequest(BaseModel):
+    plan: str = "trial"
+    uses: int = 1
+    days: int = 14
+    note: str = ""
+
+
 class UserEditRequest(BaseModel):
     disabled: bool | None = None
     password: str | None = None         # an admin sets a new password
@@ -246,8 +257,20 @@ def _no_channel(request, e):
 
 # ------------------------------------------------------------------ sessions and channels
 
-OPEN = ("/login", "/static/", "/api/auth/", "/health")
+OPEN = ("/login", "/pricing", "/static/", "/api/auth/", "/health")
 INTERNAL = ("/produce", "/social/", "/jobs/", "/n8n/")   # n8n inside Docker; no browser, no cookie
+
+
+def _from_public_proxy(request):
+    """True when the request came in through the public tunnel (the Tailscale container, PUBLIC_PROXY_HOST)."""
+    host = pipeline.env("PUBLIC_PROXY_HOST")
+    if not host or not request.client:
+        return False
+    try:
+        ips = {a[4][0] for a in socket.getaddrinfo(host, None)}
+    except OSError:      # the tunnel container is not running: nothing can come through it
+        return False
+    return request.client.host in ips
 
 
 def _job_in(path):
@@ -266,7 +289,16 @@ async def studio_session(request, call_next):
     path = request.url.path
     if path.startswith(OPEN) or (path.startswith("/oauth/") and path.endswith("/callback")):
         return await call_next(request)
+    parts = path.split("/")
+    if (path.startswith("/files/") and len(parts) == 4 and request.query_params.get("sig")
+            and auth.file_signed(parts[2], parts[3], request.query_params.get("exp"), request.query_params.get("sig"))):
+        cid = space.find_job(parts[2])          # a signed link for Instagram / Threads: this one file only
+        if cid:
+            space.set_current(cid)
+            return await call_next(request)
     if path.startswith(INTERNAL):
+        if _from_public_proxy(request):          # n8n's addresses are never reachable from the internet
+            return JSONResponse({"detail": "not found"}, status_code=404)
         token = pipeline.env("INTERNAL_TOKEN")   # set it once the Studio is on a server
         if token and not hmac.compare_digest(request.headers.get("x-internal-token", ""), token):
             return JSONResponse({"detail": "forbidden"}, status_code=403)
@@ -283,6 +315,11 @@ async def studio_session(request, call_next):
     job_cid = space.find_job(_job_in(path))
     if job_cid and not auth.may_open(user, job_cid):
         return JSONResponse({"detail": "no such video"}, status_code=404)
+    if (path.startswith("/api/") and request.method != "GET" and not path.startswith(FREE_ACTIONS)
+            and not (path.startswith("/api/channels/") and path.endswith("/open"))
+            and not plans.unlimited(user) and not plans.PLANS[plans.name(user)]["videos_per_day"]):
+        return JSONResponse({"detail": "your account has no plan yet - see the plans page or ask the Studio admin"},
+                            status_code=403)
     own = [c["id"] for c in auth.channels_of(user)]
     cid = job_cid or (sess.get("channel") if sess.get("channel") in own else own[0] if own else space.NONE)
     space.set_current(cid)
@@ -291,6 +328,49 @@ async def studio_session(request, call_next):
 
 def _user(request):
     return request.state.user
+
+
+# what an account without a plan may still change: its own password and e-mail choice
+FREE_ACTIONS = ("/api/me/", "/api/auth/")
+
+
+def _started(user_id):
+    """When each video of this account's channels was started (for the 24-hour limit): finished or
+    still running, A/B versions included; failed runs, test-mode videos and own uploads do not count."""
+    out = []
+    for c in space.all_channels():
+        if c.get("owner") != user_id:
+            continue
+        with space.use(c["id"]):
+            out += [j.get("created") or "" for j in pipeline.list_jobs()
+                    if not j["mock"] and j["kind"] != "upload" and j["state"] != "error"]
+    return out
+
+
+def access(user):
+    return plans.access(user or {}, _started(user["id"]) if user else [])
+
+
+class LimitError(Exception):
+    pass
+
+
+def check_limit(count=1, actor=None):
+    """Raises LimitError when the current channel's owner may not start `count` more videos now.
+    An admin acting in the Studio is never limited."""
+    if actor and plans.unlimited(actor):
+        return
+    owner = auth.get(space.get(space.current()).get("owner") or "")
+    if not owner or plans.unlimited(owner):
+        return
+    a = access(owner)
+    if not a["active"]:
+        raise LimitError("this account has no plan - ask the Studio admin for a trial")
+    if a["left"] < count:
+        when = time.strftime("%H:%M UTC", time.gmtime(datetime.datetime.strptime(a["next_at"], "%Y-%m-%dT%H:%M:%SZ")
+                                                      .replace(tzinfo=datetime.timezone.utc).timestamp())) if a["next_at"] else ""
+        raise LimitError(f"the {a['label']} plan makes {a['videos_per_day']} video(s) per 24 hours"
+                         + (f" - {a['left']} left now" if a["left"] else f" - the next one from {when}"))
 
 
 def _owner(request, full=False):
@@ -334,9 +414,11 @@ def auth_state(request: Request):
 @app.post("/api/auth/register")
 def register(req: SignUpRequest, response: Response):
     try:
-        user = auth.register(req.email, req.password, req.marketing, req.source, req.timezone, req.language)
+        user = auth.register(req.email, req.password, req.marketing, req.source, req.timezone, req.language,
+                             (req.invite or "").strip() or None)
     except Exception as e:
         _fail(e)
+    notify.new_account(user, auth.source_label(user))
     _sign_in(response, user)
     return {"user": auth.public(user)}
 
@@ -367,7 +449,8 @@ def me(request: Request):
         current = None
     return {"user": auth.public(user), "channels": auth.channels_of(user), "channel": current,
             "templates": {k: v["label"] for k, v in niches.TEMPLATES.items()},
-            "unsubscribe_reasons": auth.UNSUBSCRIBE_REASONS, "plans": auth.PLANS}
+            "unsubscribe_reasons": auth.UNSUBSCRIBE_REASONS, "plans": list(plans.GRANTABLE),
+            "plan_names": {k: v["label"] for k, v in plans.PLANS.items()}, "access": access(user)}
 
 
 @app.put("/api/me/password")
@@ -388,6 +471,11 @@ def change_marketing(req: MarketingRequest, request: Request):
 @app.post("/api/channels")
 def create_channel(req: ChannelRequest, request: Request):
     """A new channel from a template: its settings, script rules and starter topics."""
+    user = _user(request)
+    a = access(user)
+    if not a["unlimited"] and sum(1 for c in space.all_channels() if c.get("owner") == user["id"]) >= (a["channels"] or 0):
+        raise HTTPException(403, f"the {a['label']} plan has {a['channels'] or 'no'} channel(s)"
+                                 + (" - see the plans page" if a["channels"] else " - ask the Studio admin for a trial"))
     tpl = niches.template(req.template)
     try:
         meta = space.create(req.name, _user(request)["id"], req.template, tpl["settings"])
@@ -593,6 +681,49 @@ def studio_stats(request: Request, days: int = 30):
             "days": list(per_day.values())}
 
 
+@app.get("/api/auth/plans")
+def plan_catalog():
+    """The public plans page (no sign-in): the plans and what each one allows."""
+    return {"plans": plans.catalog(), "payments": False}
+
+
+@app.get("/api/auth/invite/{code}")
+def invite_check(code: str):
+    """The sign-up page asks what an invite link gives before the account exists."""
+    info = auth.invite_info(code)
+    if not info:
+        raise HTTPException(404, "this invite link has expired or was already used")
+    return info
+
+
+@app.get("/pricing")
+def pricing_page():
+    return HTMLResponse((STATIC / "pricing.html").read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/invites")
+def invites(request: Request):
+    _owner(request, full=True)
+    return auth.list_invites()
+
+
+@app.post("/api/invites")
+def new_invite(req: InviteRequest, request: Request):
+    """A sign-up link that gives a plan (super admin / owner)."""
+    admin = _owner(request, full=True)
+    try:
+        return auth.create_invite(admin["id"], req.plan, req.uses, req.days, req.note)
+    except Exception as e:
+        _fail(e)
+
+
+@app.delete("/api/invites/{code}")
+def drop_invite(code: str, request: Request):
+    _owner(request, full=True)
+    auth.revoke_invite(code)
+    return {"revoked": code}
+
+
 @app.get("/api/users/marketing.csv")
 def marketing_list(request: Request):
     _owner(request, full=True)   # the mailing list stays with the super admin / owner
@@ -661,9 +792,14 @@ def job(job_id: str):
 
 
 @app.post("/api/jobs")
-def start_job(req: ProduceRequest | None = None):
+def start_job(request: Request, req: ProduceRequest | None = None):
     """Start a video in the background and return at once; the dashboard polls its status."""
     req = req or ProduceRequest()
+    if not req.mock:
+        try:
+            check_limit(1 + max(0, min(4, (req.variants or 1) - 1)), _user(request))
+        except LimitError as e:
+            raise HTTPException(429, str(e))
     if not _busy.acquire(blocking=False):
         raise HTTPException(409, "another video is being produced right now")
     job_id = pipeline.new_job_id()
@@ -679,7 +815,7 @@ def start_job(req: ProduceRequest | None = None):
             if extra:
                 pipeline.make_variants(result["job_id"], extra)
             # a story split into parts: make the remaining parts right away, one video each
-            while result.get("next_part"):
+            while result.get("next_part") and not _over_limit(_user(request)):
                 nxt = pipeline.new_job_id()
                 pipeline.Job(nxt, topic="next part")
                 result = pipeline.produce(mock=False, use_video_hook=req.use_video_hook, job_id=nxt,
@@ -752,12 +888,14 @@ def rerender(job_id: str):
 
 
 @app.post("/api/jobs/{job_id}/variants")
-def variants(job_id: str, req: VariantsRequest):
+def variants(job_id: str, req: VariantsRequest, request: Request):
     """More versions of a finished video, made in the background."""
     try:
-        return {"making": start_variants(job_id, req.count)}
+        return {"making": start_variants(job_id, req.count, _user(request))}
     except BusyError as e:
         raise HTTPException(409, str(e))
+    except LimitError as e:
+        raise HTTPException(429, str(e))
     except Exception as e:
         _fail(e)
 
@@ -766,10 +904,19 @@ class BusyError(Exception):
     pass
 
 
-def start_variants(job_id, count):
-    """Shared by the Studio button and the Telegram bot (notify.on_variants)."""
+def _over_limit(actor=None):
+    try:
+        check_limit(1, actor)
+        return False
+    except LimitError:
+        return True
+
+
+def start_variants(job_id, count, actor=None):
+    """Shared by the Studio button and the Telegram bot (notify.on_variants; actor None = the channel owner's limit)."""
     if pipeline.load_job(job_id)["status"]["state"] != "done":
         raise pipeline.PipelineError("the video is not finished yet")
+    check_limit(max(0, min(4, count)), actor)
     if not _busy.acquire(blocking=False):
         raise BusyError("another video is being produced right now - try again later")
 
@@ -1106,6 +1253,7 @@ def produce(req: ProduceRequest | None = None):
                 continue
             try:
                 with space.use(meta["id"]):
+                    check_limit(1)    # the channel owner's plan
                     result = pipeline.produce(topic=(req.topic or "").strip() or None,
                                               mock=req.mock, use_video_hook=req.use_video_hook)
                     videos.append({"job_id": result["job_id"], "channel": meta["id"],

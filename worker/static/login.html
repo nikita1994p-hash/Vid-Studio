@@ -15,6 +15,7 @@
       <button class="tab active" data-mode="login" type="button">Sign in</button>
       <button class="tab" data-mode="register" type="button">Create account</button>
     </div>
+    <div class="ok-box" id="invite-hint" hidden></div>
     <p class="muted" id="first-hint" hidden>No accounts yet: the first one you create owns this Studio and
       takes over the channel that is already here.</p>
     <form id="auth-form">
@@ -32,6 +33,7 @@
       <div class="error-box" id="auth-error" hidden></div>
       <button class="btn btn-primary auth-submit" id="auth-submit">Sign in</button>
     </form>
+    <p class="muted small auth-foot"><a href="/pricing">Plans &amp; pricing</a></p>
   </main>
   <script>
     const form = document.getElementById("auth-form");
@@ -57,6 +59,7 @@
       const q = new URLSearchParams(location.search);
       const found = {};
       for (const k of ["ref", "utm_source", "utm_medium", "utm_campaign"]) if (q.get(k)) found[k] = q.get(k).slice(0, 100);
+      if (q.get("plan")) found.wanted_plan = q.get("plan").slice(0, 20);   // the plan they picked on the plans page
       if (document.referrer && !document.referrer.startsWith(location.origin)) found.referrer = document.referrer.slice(0, 300);
       if (location.search) found.landing = (location.pathname + location.search).slice(0, 300);
       const source = Object.keys(found).length ? found : saved;
@@ -64,7 +67,22 @@
       return source;
     })();
     const LOCALE = { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null, language: navigator.language || null };
-    if (/[?&](ref|utm_source)=/.test(location.search)) setMode("register");
+    if (/[?&](ref|utm_source|invite|plan)=/.test(location.search)) setMode("register");
+
+    // an invite link (?invite=CODE) gives a plan to the account made with it
+    const INVITE = new URLSearchParams(location.search).get("invite") || "";
+    let inviteOk = false;   // a dead invite must not block the sign-up itself
+    if (INVITE) {
+      fetch(`/api/auth/invite/${encodeURIComponent(INVITE)}`).then(async (r) => {
+        const box = document.getElementById("invite-hint");
+        const d = await r.json().catch(() => ({}));
+        inviteOk = r.ok;
+        box.textContent = r.ok ? `🎁 You are invited: your account starts with the ${d.label} plan.`
+          : "This invite link has expired or was already used - you can still create an account.";
+        box.className = r.ok ? "ok-box" : "ok-box warn-box";
+        box.hidden = false;
+      });
+    }
 
     fetch("/api/auth/state").then((r) => r.json()).then((s) => {
       if (s.signed_in) location.href = "/";
@@ -74,7 +92,7 @@
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const body = { email: form.email.value, password: form.password.value, ...LOCALE };
-      if (mode === "register") Object.assign(body, { marketing: form.marketing.checked, source: SOURCE });
+      if (mode === "register") Object.assign(body, { marketing: form.marketing.checked, source: SOURCE, invite: inviteOk ? INVITE : null });
       const box = document.getElementById("auth-error");
       box.hidden = true;
       try {

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plans · Vid Studio</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23ff375f'/%3E%3Cstop offset='1' stop-color='%23ff9f0a'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M16 8.6c.7 0 1.3.4 1.7 1l6 10.4c.8 1.3-.2 3-1.7 3H10c-1.5 0-2.5-1.7-1.7-3l6-10.4c.4-.6 1-1 1.7-1z' fill='white'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="promo">
+  <header class="promo-bar">
+    <a class="brand" href="/pricing"><span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg-p" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff375f"/><stop offset=".55" stop-color="#ff6a3d"/><stop offset="1" stop-color="#ff9f0a"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#lg-p)"/><path d="M16 8.6c.7 0 1.3.4 1.7 1l6 10.4c.8 1.3-.2 3-1.7 3H10c-1.5 0-2.5-1.7-1.7-3l6-10.4c.4-.6 1-1 1.7-1z" fill="#fff"/></svg></span><span>Vid</span><span class="brand-sub">Studio</span></a>
+    <a class="btn btn-outline" href="/login">Sign in</a>
+  </header>
+
+  <main class="promo-main">
+    <section class="promo-hero">
+      <p class="promo-kicker">YouTube Shorts on autopilot</p>
+      <h1>A new Short every day.<br><span class="promo-grad">Written, voiced and posted for you.</span></h1>
+      <p class="promo-sub">Vid Studio picks the topic, writes a script with a strong hook, draws the pictures, adds the
+        voice, music and captions, and posts to your channel at the time you choose. You check it in Telegram with one tap.</p>
+    </section>
+
+    <section class="promo-plans" id="plans"><div class="empty">Loading plans…</div></section>
+
+    <section class="promo-points">
+      <div><h3>Hooks that hold</h3><p class="muted">Every script gets several hooks, scored before the video is made; the best one opens it.</p></div>
+      <div><h3>Checked facts</h3><p class="muted">Numbers in the script are checked for realism before the voice-over.</p></div>
+      <div><h3>You stay in control</h3><p class="muted">Uploads stay private until you press Publish in Telegram or the Studio.</p></div>
+    </section>
+    <p class="muted small promo-foot"><a href="https://nikita1994p-hash.github.io/Vid-Studio/terms.html">Terms</a> ·
+      <a href="https://nikita1994p-hash.github.io/Vid-Studio/privacy.html">Privacy Policy</a></p>
+  </main>
+
+  <dialog id="checkout">
+    <form method="dialog">
+      <h2 id="checkout-title">Checkout</h2>
+      <p class="muted">Payments open soon. Create your account now: it is saved with the plan you picked, and we switch
+        it on as soon as payments work - or ask the Studio admin to switch it on by hand today.</p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn btn-text">Back</button>
+        <a class="btn btn-primary" id="checkout-go" href="/login">Create account</a>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    // the ref/utm tags of the link that brought them here travel on to the sign-up page
+    const keep = new URLSearchParams(location.search);
+    const signUp = (plan) => {
+      const q = new URLSearchParams(keep);
+      q.set("plan", plan);
+      if (!q.get("ref") && !q.get("utm_source")) q.set("ref", "pricing");
+      return `/login?${q}`;
+    };
+    const FEATURES = {
+      trial: (p) => [`${p.days} days, no card`, `${p.videos_per_day} video every 24 hours`, `${p.channels} channel`,
+        "Auto-posting to YouTube", "Telegram alerts with Publish buttons"],
+      standard: (p) => [`${p.videos_per_day} video every 24 hours`, `${p.channels} channel`, "Auto-posting to YouTube",
+        "Telegram alerts with Publish buttons", "Earnings and stats page"],
+      pro: (p) => [`Up to ${p.videos_per_day} videos every 24 hours`, `Up to ${p.channels} channels`,
+        "A/B versions: hook, title, voice, music", "Every connected platform", "Everything in Standard"],
+    };
+    fetch("/api/auth/plans").then((r) => r.json()).then(({ plans }) => {
+      document.getElementById("plans").innerHTML = plans.map((p) => `
+        <article class="plan ${p.key === "pro" ? "plan-best" : ""}">
+          ${p.key === "pro" ? `<span class="plan-badge">Full access</span>` : ""}
+          <h2>${esc(p.label)}</h2>
+          <p class="plan-price">${esc(p.price || "Price soon")}${p.price && p.key !== "trial" ? "<span> / month</span>" : ""}</p>
+          <p class="muted">${esc(p.pitch)}</p>
+          <ul>${(FEATURES[p.key] || (() => []))(p).map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
+          ${p.key === "trial"
+            ? `<a class="btn btn-primary plan-cta" href="${signUp("trial")}">Start free trial</a>`
+            : `<button class="btn ${p.key === "pro" ? "btn-primary" : "btn-outline"} plan-cta" data-plan="${esc(p.key)}" data-label="${esc(p.label)}">Choose ${esc(p.label)}</button>`}
+        </article>`).join("");
+      document.querySelectorAll("[data-plan]").forEach((b) => b.addEventListener("click", () => {
+        document.getElementById("checkout-title").textContent = `${b.dataset.label} plan`;
+        document.getElementById("checkout-go").href = signUp(b.dataset.plan);
+        document.getElementById("checkout").showModal();
+      }));
+    }).catch(() => { document.getElementById("plans").innerHTML = `<div class="error-box">Cannot load the plans - try again in a minute.</div>`; });
+  </script>
+</body>
+</html>

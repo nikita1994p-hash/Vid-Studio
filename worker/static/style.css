@@ -208,7 +208,7 @@ label.check { display: flex; gap: 12px; align-items: center; color: var(--text);
 .scene { display: grid; grid-template-columns: 72px 1fr; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .scene img { width: 72px; height: 128px; object-fit: cover; border-radius: 10px; background: var(--panel-2); }
 .scene audio { width: 100%; height: 32px; margin-top: 6px; }
-input[hidden] { display: none !important; }
+input[hidden], [hidden] { display: none !important; }
 .card-thumb { width: 72px; height: 128px; border-radius: 10px; background: linear-gradient(160deg, #0b3d2e, #020806);
   display: grid; place-items: center; text-align: center; padding: 4px; font-size: 10px; font-weight: 700; color: #ffd54a; }
 .error-box { background: #ff453a17; border-radius: var(--radius-sm); padding: 12px 14px; color: #ffb3ad; margin: 12px 0;
@@ -408,6 +408,45 @@ main.auth-card { margin: 0; }
 .sidebar a[hidden] { display: none; }
 .role-pick { width: auto; margin-top: 0; padding: 5px 30px 5px 10px; background-position: right 10px center; }
 .menu-left { left: 0; right: auto; }
+/* plans page (/pricing) */
+body.promo { background: radial-gradient(1200px 520px at 50% -8%, #ff375f2e, transparent 62%), var(--bg); }
+.promo-bar { display: flex; align-items: center; justify-content: space-between; max-width: 1120px; margin: 0 auto;
+  padding: 18px 24px; }
+.promo-main { max-width: 1120px; margin: 0 auto; padding: 24px 24px 64px; }
+.promo-hero { text-align: center; max-width: 780px; margin: 32px auto 48px; }
+.promo-kicker { color: var(--orange); font-weight: 600; margin: 0 0 12px; }
+.promo-hero h1 { text-wrap: balance; font-size: 56px; letter-spacing: -.045em; line-height: 1.05; margin: 0 0 20px; }
+.promo-grad { background: var(--brand); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.promo-sub { color: var(--muted); font-size: 18px; line-height: 1.5; margin: 0; }
+.promo-plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 20px; align-items: stretch; }
+.plan { position: relative; display: flex; flex-direction: column; background: var(--panel); border-radius: 24px; padding: 32px 28px;
+  box-shadow: 0 0 0 1px var(--line) inset; }
+.plan-best { box-shadow: 0 0 0 2px #ff6a3d inset, 0 30px 60px #ff375f1f; }
+.plan-badge { position: absolute; top: 18px; right: 18px; background: var(--brand); color: #fff; font-size: 12px; font-weight: 600;
+  padding: 4px 10px; border-radius: 999px; }
+.plan h2 { font-size: 24px; margin: 0 0 8px; }
+.plan-price { font-size: 32px; font-weight: 700; letter-spacing: -.03em; margin: 0 0 8px; }
+.plan-price span { font-size: 15px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.plan ul { list-style: none; padding: 0; margin: 12px 0 24px; flex: 1; }
+.plan li { padding: 7px 0 7px 26px; position: relative; border-top: 1px solid var(--line); }
+.plan li::before { content: "✓"; position: absolute; left: 2px; color: var(--green); font-weight: 700; }
+.plan-cta { width: 100%; padding: 12px; font-size: 15px; }
+.promo-points { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 28px; margin: 56px 0 24px; }
+.promo-points h3 { margin-bottom: 6px; }
+.promo-points p { margin: 0; }
+.promo-foot { text-align: center; margin-top: 32px; }
+.auth-foot { text-align: center; margin: 18px 0 0; }
+#invite-hint { margin-bottom: 12px; }
+#invite-form input[name=note] { flex: 1; min-width: 180px; width: auto; margin-top: 0; }
+#invite-form select { width: auto; margin-top: 0; }
+label.inline { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: 13px; }
+label.inline input { width: 84px !important; margin-top: 0 !important; }
+/* accounts without a plan */
+.no-plan { max-width: 640px; }
+.no-plan .card { padding: 32px; }
+.quota { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 900px) { .promo-hero h1 { font-size: 38px; } .promo-sub { font-size: 16px; } }
+
 .unsub { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .unsub .actions { margin-top: 8px; }
 .unsub select { width: auto; margin-top: 0; }

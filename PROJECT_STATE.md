@@ -183,3 +183,9 @@ See DESIGN.md (tokens, spacing, controls, safety). Check every page with `(await
 
 ## Studio stats and marketing data
 Sign-up source (?ref= / utm_*), browser time zone + language, unsubscribe reason, plan (free / trial 7 days / pro, set by hand on Users) are stored per account. Subscribers CSV: 28 columns incl. stage and last activity. Studio stats page (#/stats, super admin / owner): funnel, active 7/30 days, sources, reasons, plans, regions, videos / uploads / sign-ups per day. Never uses YouTube API data (Limited Use).
+
+## Plans, invites, plans page
+worker/plans.py: none (new accounts: menu + plans page only) / trial 3 days / standard / pro; videos per rolling 24 h 0/1/1/5 (A/B versions count), channels 0/1/1/3; admins unlimited. Admins set plans on Users (admins: plain users only); invite links (Users -> Invite links, super admin / owner) give a plan at sign-up; Telegram alert on every sign-up with a "Give trial" button (admin channels only). Public plans page /pricing: Trial -> sign-up, Standard / Pro -> "payments soon" dialog -> sign-up with wanted_plan. Prices: plans.py PLANS[...]["price"].
+
+## Public address (Tailscale Funnel)
+docker compose --profile public up -d starts the tailscale container (needs TS_AUTHKEY in .env); it publishes only the worker at https://vidstudio.<tailnet>.ts.net (tailscale/serve.json). Requests through it never reach /produce, /social/, /jobs/, /n8n/ (PUBLIC_PROXY_HOST=tailscale). Instagram / Threads fetch files through signed 24 h links (auth.sign_file, key in data/secret.key). After it runs: set PUBLIC_BASE_URL to the ts.net address.
