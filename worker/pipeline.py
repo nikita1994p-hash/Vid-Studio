@@ -2123,9 +2123,10 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
                     print(f"[warn] flux unavailable ({e}); trying photos instead", flush=True)
                     flux_down = True
                     import notify
-                    notify.once("flux", "limit", "⚠ FLUX pictures stopped working today (free daily limit of "
-                                "10,000 neurons or a Cloudflare outage). Videos use photos or number cards until "
-                                f"it resets at 00:00 UTC.\nDetails: {str(e)[:200]}")
+                    notify.once("flux", "limit", "⚠ FLUX pictures stopped working (free limit of 10,000 neurons "
+                                "per 24 hours, about 130 pictures, or a Cloudflare outage). Videos use photos or "
+                                "number cards until the oldest pictures of the last 24 hours drop out of the limit."
+                                f"\nDetails: {str(e)[:200]}")
             if not got and not source_down:
                 try:
                     credit = openverse_image(s["query"], photo, used)
