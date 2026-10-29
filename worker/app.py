@@ -54,8 +54,40 @@ def _stats_loop():
                 print(f"[warn] background stats refresh ({cid}): {e}", flush=True)
 
 
+def _redo_loop(pause=1200, give_up=48):
+    """Work through data/redo_pictures.json: videos waiting for FLUX pictures. Each one is tried every
+    20 minutes from its not_before time until FLUX answers (or 48 tries); Telegram says when it is done."""
+    import time
+    while True:
+        time.sleep(60)
+        queue = pipeline._read_json(pipeline.REDO_QUEUE, []) or []
+        due = [x for x in queue if x["not_before"] <= pipeline._now()]
+        if not due or not _busy.acquire(blocking=False):
+            continue
+        try:
+            for item in due:
+                try:
+                    with space.use(item["channel"]):
+                        made = pipeline.redo_pictures(item["job"])
+                        title = (pipeline._read_json(pipeline.job_dir(item["job"]) / "result.json") or {}).get("title")
+                        notify.send("done", f"🖼 AI pictures added ({made}) and the video re-rendered: {title}\n"
+                                            f"Check it, then publish.\n{notify.link(item['job'])}")
+                    queue = [x for x in queue if x["job"] != item["job"]]
+                except Exception as e:
+                    item["tries"] += 1
+                    item["not_before"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + pause))
+                    item["error"] = str(e)[:200]
+                    print(f"[warn] redo pictures {item['job']}: try {item['tries']}: {str(e)[:120]}", flush=True)
+                    if item["tries"] >= give_up:
+                        queue = [x for x in queue if x["job"] != item["job"]]
+                pipeline._write_json(pipeline.REDO_QUEUE, queue)
+        finally:
+            _busy.release()
+
+
 threading.Thread(target=_stats_loop, daemon=True).start()
 threading.Thread(target=notify.poll_loop, daemon=True).start()   # Telegram button presses
+threading.Thread(target=_redo_loop, daemon=True).start()         # FLUX pictures for card-only videos
 STATIC = Path(__file__).parent / "static"
 MEDIA = {".mp4": "video/mp4", ".png": "image/png", ".jpg": "image/jpeg", ".wav": "audio/wav",
          ".mp3": "audio/mpeg", ".json": "application/json", ".ass": "text/plain", ".txt": "text/plain"}
@@ -917,7 +949,8 @@ def produce(req: ProduceRequest | None = None):
     """n8n's daily run: one video for every channel with 'Daily' on, one after another.
     Returns {videos: [{job_id, channel, platforms}]} - the platforms each channel posts to."""
     req = req or ProduceRequest()
-    if not _busy.acquire(blocking=False):
+    # the daily run waits for a re-render or picture redo that is still going instead of skipping the day
+    if not _busy.acquire(timeout=900):
         raise HTTPException(409, "another video is being produced right now")
     videos, errors = [], []
     try:

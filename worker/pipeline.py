@@ -1730,6 +1730,38 @@ def replace_scene_image(job_id, idx, stream, filename):
     return sc
 
 
+REDO_QUEUE = DATA / "redo_pictures.json"   # [{channel, job, not_before, tries}] - survives restarts
+
+
+def redo_pictures(job_id):
+    """Swap the number cards of a video that ran out of FLUX for AI pictures, then re-render it and its
+    cover. Raises while FLUX is still at its limit; pictures already made are kept for the next try."""
+    d = job_dir(job_id)
+    data = load_scenes(d)
+    made = 0
+    for i, sc in enumerate(data["scenes"]):
+        if sc.get("loop") or not sc.get("card") or not sc.get("prompt"):
+            continue
+        photo = d / f"img_{i:02}.jpg"
+        flux_image(sc["prompt"], photo)
+        sc.update(visual=photo.name, card=None, is_video=False)
+        made += 1
+        _write_json(d / "scenes.json", data)
+    rerender(job_id)
+    if flag("COVERS", "true"):
+        plan = _read_json(d / "plan.json") or {}
+        make_cover(d, lines=plan.get("cover_lines") or None)
+    return made
+
+
+def queue_redo(job_id, not_before=None):
+    """Redo the pictures later (e.g. after FLUX frees up); app.py's loop works through the queue."""
+    q = [x for x in (_read_json(REDO_QUEUE, []) or []) if x["job"] != job_id]
+    q.append({"channel": space.current(), "job": job_id, "not_before": not_before or _now(), "tries": 0})
+    _write_json(REDO_QUEUE, q)
+    return q
+
+
 def rerender(job_id):
     """Rebuild final.mp4 from the saved scenes (voice, words and pictures are reused as they are)."""
     d = job_dir(job_id)
