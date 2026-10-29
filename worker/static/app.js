@@ -1361,7 +1361,11 @@ async function loadHealth() {
     const pill = $("#mode-pill");
     pill.textContent = health.mock ? "TEST MODE · free" : "LIVE · Gemini";
     pill.className = "pill" + (health.mock ? " warn" : "");
-    $("#channel-niche").textContent = health.niche || "";
+    // one short line under the channel picker; the full niche text is in the tooltip and in Settings
+    const lang = (health.language || "en").toUpperCase();
+    $("#channel-niche").textContent = [health.niche_label, lang, health.auto_publish ? "auto-publish" : "manual publish"]
+      .filter(Boolean).join(" · ");
+    $("#channel-niche").title = health.niche || "";
   } catch { /* the view shows the error */ }
 }
 

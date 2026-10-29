@@ -10,7 +10,7 @@ HERE = Path(__file__).parent
 
 KINDS = {
     "business": {
-        "label": "Business / money",
+        "label": "Business",
         "subject": "business",
         "figures": "money figures (startup cost, price, profit)",
         "on_screen": "'$300/day', 'Startup: $12K', 'Profit: $4K/mo'",
@@ -37,7 +37,7 @@ KINDS = {
                        "to film (e.g. 'Online business')",
     },
     "health": {
-        "label": "Sport & health",
+        "label": "Sport & Health",
         "subject": "topic",
         "figures": "the key numbers (minutes, reps, sets, days, hours of sleep, grams, steps)",
         "on_screen": "'10 min/day', '3 x 12 reps', '7 hours sleep', '8,000 steps'",

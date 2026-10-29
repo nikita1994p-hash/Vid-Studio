@@ -308,3 +308,4 @@ tr.winner td { background: #2ba64018; }
 .sidebar a[hidden] { display: none; }
 .role-pick { width: auto; margin-top: 0; padding: 4px 8px; }
 .menu-left { left: 0; right: auto; }
+.channel-pick { font-size: 13px; padding-left: 8px; padding-right: 8px; } .channel-sub { line-height: 1.4; }

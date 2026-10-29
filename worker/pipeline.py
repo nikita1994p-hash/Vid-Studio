@@ -2451,6 +2451,7 @@ def health():
         else env("TTS_VOICE", "Puck"),
         "language": env("CHANNEL_LANGUAGE", "en"),
         "niche": env("CHANNEL_NICHE", "surprising science facts"),
+        "niche_label": niche()["label"],
         "visuals": visual_provider(),
         "series": env("SERIES_NAME"),
         "next_episode": episode_number(),
