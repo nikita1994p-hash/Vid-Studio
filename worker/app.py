@@ -635,23 +635,37 @@ def rerender(job_id: str):
 def variants(job_id: str, req: VariantsRequest):
     """More versions of a finished video, made in the background."""
     try:
-        if pipeline.load_job(job_id)["status"]["state"] != "done":
-            raise pipeline.PipelineError("the video is not finished yet")
+        return {"making": start_variants(job_id, req.count)}
+    except BusyError as e:
+        raise HTTPException(409, str(e))
     except Exception as e:
         _fail(e)
+
+
+class BusyError(Exception):
+    pass
+
+
+def start_variants(job_id, count):
+    """Shared by the Studio button and the Telegram bot (notify.on_variants)."""
+    if pipeline.load_job(job_id)["status"]["state"] != "done":
+        raise pipeline.PipelineError("the video is not finished yet")
     if not _busy.acquire(blocking=False):
-        raise HTTPException(409, "another video is being produced right now")
+        raise BusyError("another video is being produced right now - try again later")
 
     def run():
         try:
-            pipeline.make_variants(job_id, req.count)
+            pipeline.make_variants(job_id, count)
         except Exception:
             traceback.print_exc()
         finally:
             _busy.release()
 
     space.thread(run)
-    return {"making": max(0, min(4, req.count))}
+    return max(0, min(4, count))
+
+
+notify.on_variants = start_variants
 
 
 @app.post("/api/jobs/{job_id}/publish")
