@@ -473,10 +473,54 @@ def delete_user(user_id: str, request: Request):
     return {"deleted": user_id}
 
 
+def user_stats(user_id):
+    """How one account uses the Studio, for the subscribers CSV: its channels, what they made and
+    where it went - only the Studio's own records, never data from Google/YouTube APIs (Limited Use).
+    'stage' sorts people for e-mails: signed_up -> channel -> video -> published -> autopilot."""
+    channels = [c for c in space.all_channels() if c.get("owner") == user_id]
+    names, kinds, connected, used = [], set(), set(), set()
+    made = versions = failed = uploads = 0
+    first = last = ""
+    telegram = daily = False
+    for c in channels:
+        names.append(c["name"])
+        daily = daily or c.get("daily", True)
+        with space.use(c["id"]):
+            kinds.add(pipeline.niche().get("label") or pipeline.env("NICHE_KIND", "business"))
+            connected |= {p for p in social.PLATFORMS if social._account(p)}
+            telegram = telegram or notify.status()["configured"]
+            for j in pipeline.list_jobs():
+                if j["mock"] or j["kind"] == "upload":
+                    continue
+                if j["state"] == "error":
+                    failed += 1
+                if j["state"] != "done":
+                    continue
+                if j["variant"] not in (None, "A"):
+                    versions += 1
+                else:
+                    made += 1
+                created = j.get("created") or ""
+                first, last = min(first or created, created), max(last, created)
+                posted = {p for p, s in (pipeline._read_json(pipeline.job_dir(j["job_id"]) / "status.json") or {})
+                          .get("social", {}).items() if s.get("state") == "posted"}
+                if (j.get("youtube") or {}).get("video_id"):
+                    posted.add("youtube")
+                uploads += len(posted)
+                used |= posted
+    stage = ("autopilot" if uploads and daily and "youtube" in connected else "published" if uploads
+             else "video" if made else "channel" if channels else "signed_up")
+    return {"stage": stage, "channels_count": len(channels), "channels": "; ".join(names),
+            "niches": "; ".join(sorted(kinds)), "videos_made": made, "ab_versions": versions, "failed_runs": failed,
+            "first_video_at": first, "last_video_at": last, "uploads": uploads,
+            "platforms_posted": "; ".join(sorted(used)), "platforms_connected": "; ".join(sorted(connected)),
+            "telegram_alerts": "yes" if telegram else "no", "daily_autopilot": "yes" if channels and daily else "no"}
+
+
 @app.get("/api/users/marketing.csv")
 def marketing_list(request: Request):
     _owner(request, full=True)   # the mailing list stays with the super admin / owner
-    return Response(auth.marketing_csv(), media_type="text/csv",
+    return Response(auth.marketing_csv(user_stats), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=vid-studio-subscribers.csv"})
 
 

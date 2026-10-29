@@ -223,14 +223,20 @@ def list_users(query=""):
     return [public(u) for u in sorted(found, key=lambda u: u.get("created") or "", reverse=True)]
 
 
-def marketing_csv():
-    """Only people who ticked 'news and offers', with the date they agreed."""
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow(["email", "consent_at", "signed_up"])
+def marketing_csv(usage=None):
+    """Only people who ticked 'news and offers', with the date they agreed.
+    usage(user_id) -> {column: value}: how they use the Studio (channels, videos, uploads...)."""
+    rows = []
     for u in _users():
         if u.get("marketing") and not u.get("disabled"):
-            w.writerow([u["email"], u.get("marketing_at") or "", u.get("created") or ""])
+            rows.append({"email": u["email"], "user_id": u["id"], "role": u.get("role") or "user",
+                         "consent_at": u.get("marketing_at") or "", "signed_up": u.get("created") or "",
+                         "last_login": u.get("last_login") or "", **(usage(u["id"]) if usage else {})})
+    out = io.StringIO()
+    columns = list(rows[0]) if rows else ["email", "user_id", "role", "consent_at", "signed_up", "last_login"]
+    w = csv.DictWriter(out, fieldnames=columns)
+    w.writeheader()
+    w.writerows(rows)
     return out.getvalue()
 
 

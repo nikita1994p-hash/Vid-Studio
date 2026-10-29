@@ -1284,7 +1284,8 @@ async function renderUsers(query = renderUsers.q || "") {
       ${isFullAdmin(me.user) ? `<a class="btn btn-outline" href="/api/users/marketing.csv">⬇ Subscribers CSV</a>` : ""}
     </div>
     <p class="muted small">${users.length} account(s)${query ? ` matching “${esc(query)}”` : ""} ·
-      ${subs} agreed to news and offers (the CSV has only them, with the date they agreed).</p>
+      ${subs} agreed to news and offers. The CSV has only them: the date they agreed, their channels, videos made,
+      uploads and platforms, and a stage (signed_up → channel → video → published → autopilot) to pick the right e-mail.</p>
     <div class="card"><table class="table users-table">
       <thead><tr><th>E-mail / ID</th><th>Role</th><th>Channels</th><th>News</th><th>Last sign-in</th><th>Signed in</th><th></th></tr></thead>
       <tbody>${users.map((u) => `
