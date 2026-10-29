@@ -2156,8 +2156,8 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
                     flux_down = True
                     import notify
                     notify.once("flux", "limit", "⚠ FLUX pictures stopped working (free limit of 10,000 neurons "
-                                "per 24 hours, about 130 pictures, or a Cloudflare outage). Videos use photos or "
-                                "number cards until the oldest pictures of the last 24 hours drop out of the limit."
+                                "a day, about 130 pictures, or a Cloudflare outage). Videos use photos or number "
+                                "cards until it resets at 00:00 UTC - in practice up to about an hour later."
                                 f"\nDetails: {str(e)[:200]}")
             if not got and not source_down:
                 try:
