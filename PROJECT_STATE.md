@@ -168,3 +168,12 @@ Built so the SaaS move later swaps storage, not logic.
   `notify.poll_loop` reads presses for every channel's bot (only the alert's chat may press). Needs the new
   scope youtube.force-ssl → reconnect YouTube once (Accounts → Switch account); privacy.html lists it.
 - PUBLISH_TIME 09:00 / PUBLISH_TIMEZONE Europe/Kyiv now also in .env (default for new channels).
+
+## FLUX settings (29.10.2026)
+- FLUX_STEPS = 4 everywhere (channel settings, .env, .env.example, schema default): flux-1-schnell is distilled for 1-4
+  steps; measured ~220 neurons/picture at 6 steps, 4 steps ≈ 165 → ≈ 60 pictures ≈ 10 videos per day on the free 10k.
+- Workers AI flux-1-schnell accepts ONLY `prompt` and `steps` (verified: width, height, num_inference_steps, seed → HTTP 400
+  "Additional properties not allowed"). Output is always 1024x1024; the renderer crops to 9:16.
+- Limit behaviour seen 29.10: refused at 00:05/00:22 UTC, worked 00:54 (≈1.75k used), refused again ≈01:25 while the
+  dashboard said ≈2k/10k today — enforcement and the dashboard disagree; treat it as unknown until observed again.
+- `data/redo_pictures.json` + app.py `_redo_loop`: card-only videos get FLUX pictures later (pipeline.queue_redo).

@@ -156,7 +156,7 @@ SETTINGS_SCHEMA = [
     {"key": "IMAGE_STYLE", "group": "Picture", "label": "Picture style (added to every AI prompt)", "type": "text",
      "default": "photorealistic, cinematic light"},
     {"key": "PROMPT_CHECK", "group": "Picture", "label": "Check picture prompts before FLUX (removes things AI draws badly)", "type": "bool", "default": "true"},
-    {"key": "FLUX_STEPS", "group": "Picture", "label": "FLUX quality steps (1-8)", "type": "number", "min": 1, "max": 8, "default": "6"},
+    {"key": "FLUX_STEPS", "group": "Picture", "label": "FLUX quality steps (1-8; 4 = what schnell was trained for, each extra step costs neurons)", "type": "number", "min": 1, "max": 8, "default": "4"},
     # sound
     {"key": "MUSIC_TRACK", "group": "Sound", "label": "Music", "type": "select", "options": [], "default": "auto"},
     {"key": "MUSIC_VOLUME", "group": "Sound", "label": "Music volume (0-0.4)", "type": "number", "min": 0, "max": 0.4, "step": 0.01, "default": "0.12"},
@@ -1389,7 +1389,7 @@ def flux_image(prompt, path):
         "prompt": f"{prompt}. Vertical composition, subject centered, "
                   f"{env('IMAGE_STYLE', 'photorealistic, cinematic light')}, sharp focus, natural proportions, "
                   "anatomically correct, clean uncluttered background, no text, no letters, no logos, no watermark.",
-        "steps": int(env("FLUX_STEPS", "6")),
+        "steps": int(env("FLUX_STEPS", "4")),
     }).encode()
     req = urllib.request.Request(url, data=body, headers={
         "Authorization": f"Bearer {env('CF_API_TOKEN')}", "Content-Type": "application/json"})
