@@ -484,9 +484,18 @@ def youtube_set_mode(job_id, mode):
     vid = _uploaded_id(job_id)
     acct = _token("youtube")
     status = pipeline.youtube_status(mode)
-    _youtube_call("PUT", "https://www.googleapis.com/youtube/v3/videos", params={"part": "status"},
-                  json_body={"id": vid, "status": status},
-                  headers={"Authorization": f"Bearer {acct['access_token']}"})
+    try:
+        _youtube_call("PUT", "https://www.googleapis.com/youtube/v3/videos", params={"part": "status"},
+                      json_body={"id": vid, "status": status},
+                      headers={"Authorization": f"Bearer {acct['access_token']}"})
+    except SocialError as e:
+        if "videoNotFound" not in str(e) and "404" not in str(e):
+            raise
+        # deleted in YouTube Studio: forget it, so the next Publish uploads the video again
+        job = pipeline.Job(job_id)
+        job.status["youtube"] = {"state": "none", "deleted_at": pipeline._now(), "deleted_id": vid}
+        job.stage("youtube", "pending", "deleted on YouTube")
+        raise SocialError("this video was deleted on YouTube - press Publish again to upload it anew")
     shown = "scheduled" if status.get("publishAt") else status["privacyStatus"]
     job = pipeline.Job(job_id)
     job.status["youtube"] = {**job.status.get("youtube", {}), "mode": shown, "changed_at": pipeline._now()}
