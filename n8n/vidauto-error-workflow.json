@@ -1,0 +1,47 @@
+{
+  "id": "VidAutoErrors001",
+  "name": "VidAuto: Errors to Telegram",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "6f1d2a40-0b1e-4c55-9a51-1a2b3c4d5e01",
+      "name": "Ошибка в сценарии",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://worker:8000/n8n/error",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "6f1d2a40-0b1e-4c55-9a51-1a2b3c4d5e02",
+      "name": "В Telegram через Студию",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "content": "## Ошибки → Telegram\nЕсли сценарий «VidAuto: Make & Publish» упал (Студия не отвечает, тайм-аут, сломался шаг), n8n запускает этот сценарий. Он передаёт ошибку в Студию, а Студия шлёт её в Telegram всех каналов.\nНазначен в настройках основного сценария: Settings → Error workflow.",
+        "height": 200,
+        "width": 420
+      },
+      "id": "6f1d2a40-0b1e-4c55-9a51-1a2b3c4d5e03",
+      "name": "Подсказка",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -240]
+    }
+  ],
+  "connections": {
+    "Ошибка в сценарии": { "main": [[{ "node": "В Telegram через Студию", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "active": false
+}

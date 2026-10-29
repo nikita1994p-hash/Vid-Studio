@@ -239,7 +239,7 @@ def _no_channel(request, e):
 # ------------------------------------------------------------------ sessions and channels
 
 OPEN = ("/login", "/static/", "/api/auth/", "/health")
-INTERNAL = ("/produce", "/social/", "/jobs/")   # n8n inside Docker; no browser, no cookie
+INTERNAL = ("/produce", "/social/", "/jobs/", "/n8n/")   # n8n inside Docker; no browser, no cookie
 
 
 def _job_in(path):
@@ -943,6 +943,19 @@ def oauth_callback(platform: str, code: str = "", state: str = "", error: str = 
 
 
 # ------------------------------------------------------------------- n8n side
+
+@app.post("/n8n/error")
+def n8n_error(payload: dict):
+    """n8n's error workflow: a run of 'VidAuto: Make & Publish' failed (Studio unreachable, timeout,
+    a node broke). Telegram gets it on every channel's chat, since the run belongs to no one channel."""
+    ex, wf = payload.get("execution") or {}, payload.get("workflow") or {}
+    err = (ex.get("error") or {}).get("message") or (payload.get("trigger") or {}).get("error", {}).get("message") or "unknown error"
+    text = (f"❌ n8n: “{wf.get('name') or 'workflow'}” failed"
+            + (f" at “{ex['lastNodeExecuted']}”" if ex.get("lastNodeExecuted") else "")
+            + f"\n{str(err)[:400]}" + (f"\n{ex['url']}" if ex.get("url") else ""))
+    print(f"[warn] {text}", flush=True)
+    return {"sent_to": notify.broadcast("error", text)}
+
 
 @app.post("/produce")
 def produce(req: ProduceRequest | None = None):

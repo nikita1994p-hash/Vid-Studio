@@ -201,7 +201,8 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "errorWorkflow": "VidAutoErrors001"
   },
   "pinData": {},
   "active": false

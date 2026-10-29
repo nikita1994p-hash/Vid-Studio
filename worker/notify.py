@@ -150,6 +150,19 @@ def _bots():
     return bots
 
 
+def broadcast(event, text):
+    """An alert that belongs to no single channel (n8n failed): once to every bot + chat in use."""
+    sent = set()
+    for token, channels in _bots().items():
+        for cid, chat in channels:
+            if (token, chat) in sent:
+                continue
+            with space.use(cid):
+                if send(event, text):
+                    sent.add((token, chat))
+    return len(sent)
+
+
 def _press(token, channels, cq):
     """One button press: 'pub|<job>' makes the private upload public, 'del|<job>' deletes it,
     'tst|<channel>' only answers (the test message). Only the chat the alert went to may press it."""
