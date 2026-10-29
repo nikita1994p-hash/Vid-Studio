@@ -49,6 +49,23 @@
 
     document.querySelectorAll(".auth-tabs .tab").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
 
+    // where this visitor came from: ?ref= / utm_* of the link and the referring site, kept for this tab
+    // so it survives switching between Sign in and Create account
+    const SOURCE = (() => {
+      let saved = {};
+      try { saved = JSON.parse(sessionStorage.getItem("vs_source") || "{}"); } catch (e) { /* private mode */ }
+      const q = new URLSearchParams(location.search);
+      const found = {};
+      for (const k of ["ref", "utm_source", "utm_medium", "utm_campaign"]) if (q.get(k)) found[k] = q.get(k).slice(0, 100);
+      if (document.referrer && !document.referrer.startsWith(location.origin)) found.referrer = document.referrer.slice(0, 300);
+      if (location.search) found.landing = (location.pathname + location.search).slice(0, 300);
+      const source = Object.keys(found).length ? found : saved;
+      try { sessionStorage.setItem("vs_source", JSON.stringify(source)); } catch (e) { /* private mode */ }
+      return source;
+    })();
+    const LOCALE = { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null, language: navigator.language || null };
+    if (/[?&](ref|utm_source)=/.test(location.search)) setMode("register");
+
     fetch("/api/auth/state").then((r) => r.json()).then((s) => {
       if (s.signed_in) location.href = "/";
       if (s.first_account) { document.getElementById("first-hint").hidden = false; setMode("register"); }
@@ -56,8 +73,8 @@
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const body = { email: form.email.value, password: form.password.value };
-      if (mode === "register") body.marketing = form.marketing.checked;
+      const body = { email: form.email.value, password: form.password.value, ...LOCALE };
+      if (mode === "register") Object.assign(body, { marketing: form.marketing.checked, source: SOURCE });
       const box = document.getElementById("auth-error");
       box.hidden = true;
       try {

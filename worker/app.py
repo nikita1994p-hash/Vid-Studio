@@ -6,6 +6,7 @@
 /produce, /social/..., /jobs/<id>/...   what n8n calls (channel taken from the video, or every channel)
 /files/<job>/<name>                     artifacts (video, images, voice)
 """
+import datetime
 import hmac
 import json
 import threading
@@ -190,11 +191,16 @@ class SignUpRequest(BaseModel):
     email: str
     password: str
     marketing: bool = False             # the separate 'news and offers' tick box, off by default
+    source: dict | None = None          # ?ref= / utm_* of the sign-up link and the referring site
+    timezone: str | None = None         # the browser's own time zone and language
+    language: str | None = None
 
 
 class SignInRequest(BaseModel):
     email: str
     password: str
+    timezone: str | None = None
+    language: str | None = None
 
 
 class PasswordRequest(BaseModel):
@@ -204,6 +210,7 @@ class PasswordRequest(BaseModel):
 
 class MarketingRequest(BaseModel):
     marketing: bool
+    reason: str | None = None           # why they unsubscribed (optional)
 
 
 class ChannelRequest(BaseModel):
@@ -220,6 +227,7 @@ class UserEditRequest(BaseModel):
     disabled: bool | None = None
     password: str | None = None         # an admin sets a new password
     role: str | None = None             # user | admin | owner (super admin / owner only)
+    plan: str | None = None             # free | trial | pro (super admin / owner only)
 
 
 def _fail(e):
@@ -268,8 +276,8 @@ async def studio_session(request, call_next):
         return await call_next(request)
     user, sess = auth.session(request.cookies.get(COOKIE))
     if not user:
-        if path == "/":
-            return RedirectResponse("/login")
+        if path == "/":   # keep ?ref= / utm_* of a sign-up link for the login page
+            return RedirectResponse("/login" + (f"?{request.url.query}" if request.url.query else ""))
         return JSONResponse({"detail": "sign in first"}, status_code=401)
     request.state.user = user
     job_cid = space.find_job(_job_in(path))
@@ -326,7 +334,7 @@ def auth_state(request: Request):
 @app.post("/api/auth/register")
 def register(req: SignUpRequest, response: Response):
     try:
-        user = auth.register(req.email, req.password, req.marketing)
+        user = auth.register(req.email, req.password, req.marketing, req.source, req.timezone, req.language)
     except Exception as e:
         _fail(e)
     _sign_in(response, user)
@@ -336,7 +344,7 @@ def register(req: SignUpRequest, response: Response):
 @app.post("/api/auth/login")
 def login(req: SignInRequest, response: Response):
     try:
-        user = auth.authenticate(req.email, req.password)
+        user = auth.authenticate(req.email, req.password, req.timezone, req.language)
     except Exception as e:
         _fail(e)
     _sign_in(response, user)
@@ -358,7 +366,8 @@ def me(request: Request):
     except space.SpaceError:
         current = None
     return {"user": auth.public(user), "channels": auth.channels_of(user), "channel": current,
-            "templates": {k: v["label"] for k, v in niches.TEMPLATES.items()}}
+            "templates": {k: v["label"] for k, v in niches.TEMPLATES.items()},
+            "unsubscribe_reasons": auth.UNSUBSCRIBE_REASONS, "plans": auth.PLANS}
 
 
 @app.put("/api/me/password")
@@ -373,7 +382,7 @@ def change_password(req: PasswordRequest, request: Request, response: Response):
 
 @app.put("/api/me/marketing")
 def change_marketing(req: MarketingRequest, request: Request):
-    return auth.public(auth.set_marketing(_user(request)["id"], req.marketing))
+    return auth.public(auth.set_marketing(_user(request)["id"], req.marketing, req.reason))
 
 
 @app.post("/api/channels")
@@ -437,7 +446,8 @@ def users(request: Request, q: str = ""):
 
 @app.patch("/api/users/{user_id}")
 def edit_user(user_id: str, req: UserEditRequest, request: Request):
-    wanted = [a for a, v in (("block", req.disabled), ("password", req.password), ("role", req.role)) if v is not None]
+    wanted = [a for a, v in (("block", req.disabled), ("password", req.password), ("role", req.role),
+                             ("plan", req.plan)) if v is not None]
     _managed(request, user_id, *wanted)
     try:
         if req.disabled is not None:
@@ -446,6 +456,8 @@ def edit_user(user_id: str, req: UserEditRequest, request: Request):
             auth.set_password(user_id, req.password)
         if req.role:
             auth.set_role(user_id, req.role)
+        if req.plan:
+            auth.set_plan(user_id, req.plan)
     except Exception as e:
         _fail(e)
     return auth.public(auth.get(user_id))
@@ -473,12 +485,12 @@ def delete_user(user_id: str, request: Request):
     return {"deleted": user_id}
 
 
-def user_stats(user_id):
-    """How one account uses the Studio, for the subscribers CSV: its channels, what they made and
-    where it went - only the Studio's own records, never data from Google/YouTube APIs (Limited Use).
+def _usage(user_id):
+    """How one account uses the Studio: (summary row, [(date, "video" | "upload")]). Only the Studio's
+    own records, never data from Google/YouTube APIs (Limited Use).
     'stage' sorts people for e-mails: signed_up -> channel -> video -> published -> autopilot."""
     channels = [c for c in space.all_channels() if c.get("owner") == user_id]
-    names, kinds, connected, used = [], set(), set(), set()
+    names, kinds, connected, used, events = [], set(), set(), set(), []
     made = versions = failed = uploads = 0
     first = last = ""
     telegram = daily = False
@@ -502,19 +514,83 @@ def user_stats(user_id):
                     made += 1
                 created = j.get("created") or ""
                 first, last = min(first or created, created), max(last, created)
-                posted = {p for p, s in (pipeline._read_json(pipeline.job_dir(j["job_id"]) / "status.json") or {})
-                          .get("social", {}).items() if s.get("state") == "posted"}
-                if (j.get("youtube") or {}).get("video_id"):
-                    posted.add("youtube")
+                events.append((created[:10], "video"))
+                status = pipeline._read_json(pipeline.job_dir(j["job_id"]) / "status.json") or {}
+                posted = {p: v.get("at") or "" for p, v in (status.get("social") or {}).items() if v.get("state") == "posted"}
+                yt = status.get("youtube") or {}
+                if yt.get("video_id") and "youtube" not in posted:
+                    posted["youtube"] = yt.get("at") or ""
+                for at in posted.values():
+                    events.append((at[:10] or created[:10], "upload"))
                 uploads += len(posted)
-                used |= posted
+                used |= set(posted)
     stage = ("autopilot" if uploads and daily and "youtube" in connected else "published" if uploads
              else "video" if made else "channel" if channels else "signed_up")
-    return {"stage": stage, "channels_count": len(channels), "channels": "; ".join(names),
-            "niches": "; ".join(sorted(kinds)), "videos_made": made, "ab_versions": versions, "failed_runs": failed,
-            "first_video_at": first, "last_video_at": last, "uploads": uploads,
-            "platforms_posted": "; ".join(sorted(used)), "platforms_connected": "; ".join(sorted(connected)),
-            "telegram_alerts": "yes" if telegram else "no", "daily_autopilot": "yes" if channels and daily else "no"}
+    active = max([d for d, _ in events] + [""])
+    idle = ""
+    if active:
+        idle = (datetime.date.today() - datetime.date.fromisoformat(active)).days
+    row = {"stage": stage, "channels_count": len(channels), "channels": "; ".join(names),
+           "niches": "; ".join(sorted(kinds)), "videos_made": made, "ab_versions": versions, "failed_runs": failed,
+           "first_video_at": first, "last_video_at": last, "uploads": uploads,
+           "platforms_posted": "; ".join(sorted(used)), "platforms_connected": "; ".join(sorted(connected)),
+           "telegram_alerts": "yes" if telegram else "no", "daily_autopilot": "yes" if channels and daily else "no",
+           "last_activity_at": active, "days_inactive": idle}
+    return row, events
+
+
+def user_stats(user_id):
+    """One row of the subscribers CSV (see _usage)."""
+    return _usage(user_id)[0]
+
+
+STAGES = ("signed_up", "channel", "video", "published", "autopilot")
+
+
+@app.get("/api/stats")
+def studio_stats(request: Request, days: int = 30):
+    """The Studio stats page (super admin / owner): the funnel by stage, who is active, where people
+    come from, why they unsubscribe, plans, and videos / uploads / sign-ups per day."""
+    _owner(request, full=True)
+    days = max(7, min(90, days))
+    today = datetime.date.today()
+    dates = [(today - datetime.timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
+    per_day = {d: {"date": d, "signups": 0, "videos": 0, "uploads": 0} for d in dates}
+    funnel = dict.fromkeys(STAGES, 0)
+    sources, reasons, plans, zones = {}, {}, {}, {}
+    active7 = active30 = subscribed = 0
+    users = auth._users()
+    for u in users:
+        row, events = _usage(u["id"])
+        reached = STAGES.index(row["stage"])
+        for st in STAGES[:reached + 1]:
+            funnel[st] += 1          # a person who publishes also counts as having a channel and a video
+        last = max([d for d, _ in events] + [(u.get("last_login") or "")[:10]])
+        if last and (today - datetime.date.fromisoformat(last)).days < 7:
+            active7 += 1
+        if last and (today - datetime.date.fromisoformat(last)).days < 30:
+            active30 += 1
+        signed = (u.get("created") or "")[:10]
+        if signed in per_day:
+            per_day[signed]["signups"] += 1
+        for d, kind in events:
+            if d in per_day:
+                per_day[d]["videos" if kind == "video" else "uploads"] += 1
+        src = auth.source_label(u)
+        sources[src] = sources.get(src, 0) + 1
+        plans[u.get("plan") or "free"] = plans.get(u.get("plan") or "free", 0) + 1
+        zone = (u.get("timezone") or "unknown").split("/")[0]
+        zones[zone] = zones.get(zone, 0) + 1
+        if u.get("marketing") and not u.get("disabled"):
+            subscribed += 1
+        if u.get("unsubscribed_at"):
+            r = u.get("unsubscribe_reason") or "no reason given"
+            reasons[r] = reasons.get(r, 0) + 1
+    top = lambda d: sorted(({"name": k, "count": v} for k, v in d.items()), key=lambda x: -x["count"])
+    return {"users": len(users), "active_7": active7, "active_30": active30, "subscribed": subscribed,
+            "unsubscribed": sum(reasons.values()), "funnel": [{"stage": k, "count": funnel[k]} for k in STAGES],
+            "sources": top(sources), "unsubscribe_reasons": top(reasons), "plans": top(plans), "regions": top(zones),
+            "days": list(per_day.values())}
 
 
 @app.get("/api/users/marketing.csv")

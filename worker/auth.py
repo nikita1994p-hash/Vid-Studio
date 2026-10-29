@@ -22,7 +22,11 @@ SUPERADMINS = {x.strip().lower() for x in os.environ.get("SUPERADMIN_EMAILS", ""
 FULL_ROLES = ("superadmin", "owner")         # every action on every account (but other super admins)
 ADMIN_ROLES = FULL_ROLES + ("admin",)       # may open the Users page
 ROLES = ("user", "admin", "owner")          # what a full admin may give; superadmin comes only from .env
-ACTIONS = ("password", "block", "logout", "delete", "role")
+ACTIONS = ("password", "block", "logout", "delete", "role", "plan")
+PLANS = ("free", "trial", "pro")          # SaaS prep: no payments yet, the super admin sets it by hand
+TRIAL_DAYS = 14
+UNSUBSCRIBE_REASONS = ("too many e-mails", "not useful", "I stopped using Vid Studio", "never signed up for it", "other")
+SOURCE_KEYS = ("ref", "utm_source", "utm_medium", "utm_campaign", "referrer", "landing")
 USERS = space.ROOT / "users.json"
 SESSIONS = space.ROOT / "sessions.json"
 SESSION_DAYS = 30
@@ -84,7 +88,32 @@ def _check_password(password):
 def public(user):
     """What the browser may see about a user."""
     return {k: user.get(k) for k in ("id", "email", "role", "marketing", "marketing_at", "created",
-                                      "last_login", "disabled")} | {"sessions": active_sessions(user["id"])}
+                                      "last_login", "disabled", "plan", "trial_until", "timezone", "language")} | {
+        "plan": user.get("plan") or "free", "source": source_label(user), "sessions": active_sessions(user["id"])}
+
+
+def _clean(value, size=100):
+    return " ".join(str(value or "").split())[:size]
+
+
+def source_label(user):
+    """Where the account came from, in one word: ref, else utm_source, else the referring site, else 'direct'."""
+    s = user.get("source") or {}
+    if s.get("ref") or s.get("utm_source"):
+        return s.get("ref") or s.get("utm_source")
+    ref = s.get("referrer") or ""
+    host = re.sub(r"^https?://(www\.)?", "", ref).split("/")[0]
+    return host or "direct"
+
+
+def _locale(timezone=None, language=None):
+    """The browser's own time zone and language (no GPS, no IP lookup): mail at the right hour, per market."""
+    out = {}
+    if timezone and re.fullmatch(r"[A-Za-z_+\-/0-9]{1,60}", timezone):
+        out["timezone"] = timezone
+    if language and re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*", language):
+        out["language"] = language[:20]
+    return out
 
 
 # ------------------------------------------------------------------ accounts
@@ -93,9 +122,10 @@ def has_users():
     return bool(_users())
 
 
-def register(email, password, marketing=False):
+def register(email, password, marketing=False, source=None, timezone=None, language=None):
     """A new account. The very first one is the owner and takes over the channels made before
-    accounts existed. marketing: the separate, optional 'news and offers' tick box."""
+    accounts existed. marketing: the separate, optional 'news and offers' tick box.
+    source: where they came from (?ref= / utm_* of the sign-up link, the referring site)."""
     email = _email(email)
     _check_password(password)
     with _lock:
@@ -106,7 +136,9 @@ def register(email, password, marketing=False):
                 "role": "superadmin" if email in SUPERADMINS else "owner" if not users else "user",
                 "created": _now(), "last_login": None,
                 "marketing": bool(marketing), "marketing_at": _now() if marketing else None,
-                "disabled": False}
+                "disabled": False, "plan": "free", "trial_until": None,
+                "source": {k: _clean(v, 300) for k, v in (source or {}).items() if k in SOURCE_KEYS and v},
+                **_locale(timezone, language)}
         users.append(user)
         _save_users(users)
     if user["role"] in FULL_ROLES and len(users) == 1:
@@ -118,7 +150,7 @@ def get(user_id):
     return next((u for u in _users() if u["id"] == user_id), None)
 
 
-def authenticate(email, password):
+def authenticate(email, password, timezone=None, language=None):
     email = (email or "").strip().lower()
     count, last = _failures.get(email, (0, 0))
     if count >= 5 and time.time() - last < 60 * min(count - 4, 15):
@@ -130,7 +162,7 @@ def authenticate(email, password):
     if user.get("disabled"):
         raise AuthError("this account is blocked - ask the Studio admin")
     _failures.pop(email, None)
-    _update(user["id"], last_login=_now())
+    _update(user["id"], last_login=_now(), **_locale(timezone, language))
     return user
 
 
@@ -161,8 +193,24 @@ def set_password(user_id, new):
     end_sessions(user_id)
 
 
-def set_marketing(user_id, on):
-    return _update(user_id, marketing=bool(on), marketing_at=_now() if on else None)
+def set_marketing(user_id, on, reason=None):
+    """reason: why they unsubscribed (one of UNSUBSCRIBE_REASONS, optional) - kept for the Studio stats."""
+    if on:
+        return _update(user_id, marketing=True, marketing_at=_now(), unsubscribed_at=None, unsubscribe_reason=None)
+    was = (get(user_id) or {}).get("marketing")
+    changes = {"marketing": False, "marketing_at": None}
+    if was:
+        changes.update(unsubscribed_at=_now(),
+                       unsubscribe_reason=reason if reason in UNSUBSCRIBE_REASONS else None)
+    return _update(user_id, **changes)
+
+
+def set_plan(user_id, plan):
+    """free | trial (TRIAL_DAYS from today) | pro. Payments come later; until then the super admin sets it."""
+    if plan not in PLANS:
+        raise AuthError("the plan must be free, trial or pro")
+    until = time.strftime("%Y-%m-%d", time.gmtime(time.time() + TRIAL_DAYS * 86400)) if plan == "trial" else None
+    _update(user_id, plan=plan, trial_until=until)
 
 
 def set_disabled(user_id, off):
@@ -200,6 +248,8 @@ def can_manage(actor, target, action):
         return False
     if actor["role"] in FULL_ROLES:
         return not (actor["role"] == "owner" and target["role"] == "owner")
+    if action == "plan":
+        return False
     return target["role"] == "user" and action in ("password", "block", "logout")
 
 
@@ -231,7 +281,11 @@ def marketing_csv(usage=None):
         if u.get("marketing") and not u.get("disabled"):
             rows.append({"email": u["email"], "user_id": u["id"], "role": u.get("role") or "user",
                          "consent_at": u.get("marketing_at") or "", "signed_up": u.get("created") or "",
-                         "last_login": u.get("last_login") or "", **(usage(u["id"]) if usage else {})})
+                         "last_login": u.get("last_login") or "", "source": source_label(u),
+                         "utm_campaign": (u.get("source") or {}).get("utm_campaign") or "",
+                         "timezone": u.get("timezone") or "", "language": u.get("language") or "",
+                         "plan": u.get("plan") or "free", "trial_until": u.get("trial_until") or "",
+                         **(usage(u["id"]) if usage else {})})
     out = io.StringIO()
     columns = list(rows[0]) if rows else ["email", "user_id", "role", "consent_at", "signed_up", "last_login"]
     w = csv.DictWriter(out, fieldnames=columns)

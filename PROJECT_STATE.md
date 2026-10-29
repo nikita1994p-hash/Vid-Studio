@@ -177,3 +177,9 @@ Built so the SaaS move later swaps storage, not logic.
 - Limit behaviour seen 29.10: refused at 00:05/00:22 UTC, worked 00:54 (≈1.75k used), refused again ≈01:25 while the
   dashboard said ≈2k/10k today — enforcement and the dashboard disagree; treat it as unknown until observed again.
 - `data/redo_pictures.json` + app.py `_redo_loop`: card-only videos get FLUX pictures later (pipeline.queue_redo).
+
+## Design rules
+See DESIGN.md (tokens, spacing, controls, safety). Check every page with `(await import("/static/ui-audit.js")).auditAll()` at 1440 px and 375 px.
+
+## Studio stats and marketing data
+Sign-up source (?ref= / utm_*), browser time zone + language, unsubscribe reason, plan (free / trial 14 days / pro, set by hand on Users) are stored per account. Subscribers CSV: 28 columns incl. stage and last activity. Studio stats page (#/stats, super admin / owner): funnel, active 7/30 days, sources, reasons, plans, regions, videos / uploads / sign-ups per day. Never uses YouTube API data (Limited Use).

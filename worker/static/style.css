@@ -185,7 +185,7 @@ input[type=range], input[type=radio], progress { accent-color: var(--blue); }
 
 /* on/off switches (every checkbox) */
 input[type=checkbox] { appearance: none; -webkit-appearance: none; flex: none; position: relative; margin: 0;
-  width: 44px; height: 26px; border-radius: 13px; background: #39393d; cursor: pointer; vertical-align: middle;
+  width: 44px; height: 26px; border-radius: 13px; background: #4a4a50; cursor: pointer; vertical-align: middle;
   transition: background .25s var(--ease); }
 input[type=checkbox]::before { content: ""; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%;
   background: #fff; box-shadow: 0 3px 8px #0000004d, 0 1px 1px #00000029; transition: transform .25s var(--ease); }
@@ -250,6 +250,9 @@ progress { width: 100%; margin-bottom: 12px; }
   .kv { grid-template-columns: 1fr; }
   .pill { display: none; }
   .topbar .brand-sub { display: none; }
+  .card { padding: 18px; }
+  main .stats.stats-wide { grid-template-columns: repeat(2, minmax(0, 1fr)); }   /* beats the later rule */
+  main .card.ok-box, main .card.warn-box { padding: 14px 16px; }
 }
 
 /* settings, accounts, publish */
@@ -264,6 +267,7 @@ progress { width: 100%; margin-bottom: 12px; }
 .setting > label.check { min-height: 44px; margin-bottom: 0; }
 .setting > .range { min-height: 44px; }
 .setting .chip { padding: 1px 8px; border: 0; color: var(--amber); background: #ff9f0a1f; }
+.setting button.chip { min-height: 24px; padding: 3px 10px; cursor: pointer; }
 .setting .chip::before { display: none; }
 .setting input[type="color"] { width: 64px; height: 36px; padding: 2px; border-radius: 10px; border: 1px solid var(--line); background: var(--field); }
 .range { display: flex; align-items: center; gap: 12px; }
@@ -275,6 +279,7 @@ details > summary { cursor: pointer; color: var(--text); margin: 12px 0; font-we
 .acct-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap: 20px; }
 .acct h2 { display: flex; gap: 10px; align-items: center; }
 .acct-avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--panel-2); display: grid; place-items: center; }
+.ok-box, .warn-box { border: 0; border-radius: var(--radius-sm); padding: 14px 16px; }
 .ok-box { box-shadow: 0 0 0 1px #30d15855 inset; background: #30d15812; color: #a6f0b8; margin-bottom: 16px; }
 .platforms { display: grid; gap: 8px; margin-bottom: 14px; }
 .platform { display: flex; align-items: center; color: var(--text); font-size: 14px; margin: 0; padding: 10px 12px;
@@ -395,9 +400,14 @@ main.auth-card { margin: 0; }
 .channel-form select { width: auto; }
 .users-bar #user-search { flex: 1; min-width: 220px; margin-top: 0; }
 .users-table td { vertical-align: top; }
+.users-table td, .users-table th { white-space: nowrap; }
+.users-table td:nth-child(5) { white-space: normal; min-width: 160px; }
 .user-id { display: inline-block; margin-top: 4px; font-size: 11px; color: var(--muted); cursor: copy; }
 .user-actions { white-space: nowrap; }
 .user-actions .btn { padding: 4px 10px; }
 .sidebar a[hidden] { display: none; }
 .role-pick { width: auto; margin-top: 0; padding: 5px 30px 5px 10px; background-position: right 10px center; }
 .menu-left { left: 0; right: auto; }
+.unsub { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.unsub .actions { margin-top: 8px; }
+.unsub select { width: auto; margin-top: 0; }

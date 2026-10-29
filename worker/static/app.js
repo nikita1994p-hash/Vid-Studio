@@ -1113,6 +1113,7 @@ async function route() {
     else if (page === "channels") await renderChannels();
     else if (page === "account") await renderAccount();
     else if (page === "users") await renderUsers();
+    else if (page === "stats") await renderStats();
     else if (me && !me.channel) { location.hash = "#/channels"; return; }
     else await renderDashboard();
   } catch (e) {
@@ -1133,6 +1134,7 @@ async function loadMe() {
     : `<option value="">No channel yet</option>`;
   $("#user-email").textContent = me.user.email;
   $("#users-link").hidden = !isAdmin(me.user);
+  $("#stats-link").hidden = !isFullAdmin(me.user);
 }
 
 $("#channel-pick").addEventListener("change", async (e) => {
@@ -1238,9 +1240,18 @@ async function renderAccount() {
   view.innerHTML = `
     <h1>My account</h1>
     <div class="card"><h2>${esc(u.email)}</h2>
-      <p class="muted">${esc(ROLE_NAME[u.role] || "User")} · since ${esc(when(u.created))}</p>
+      <p class="muted">${esc(ROLE_NAME[u.role] || "User")} · ${esc(PLAN_NAME[u.plan] || "Free")} plan${u.trial_until ? ` until ${esc(u.trial_until)}` : ""} · since ${esc(when(u.created))}</p>
       <label class="check"><input type="checkbox" id="acc-marketing" ${u.marketing ? "checked" : ""}>
         Send me news, tips and offers about Vid Studio by e-mail</label>
+      <div class="unsub" id="unsub" hidden>
+        <p class="muted small">Sorry to see you go. Why are you unsubscribing? <span class="muted">(optional - it helps us)</span></p>
+        <div class="actions">
+          <select id="unsub-reason"><option value="">Rather not say</option>
+            ${me.unsubscribe_reasons.map((r) => `<option value="${esc(r)}">${esc(r[0].toUpperCase() + r.slice(1))}</option>`).join("")}</select>
+          <button class="btn btn-primary" id="unsub-ok">Unsubscribe</button>
+          <button class="btn btn-text" id="unsub-cancel">Keep me subscribed</button>
+        </div>
+      </div>
     </div>
     <div class="card"><h2>Change password</h2>
       <form id="pw-form" class="settings-form">
@@ -1251,11 +1262,23 @@ async function renderAccount() {
       </form>
     </div>
     <div class="actions"><button class="btn btn-outline" data-action="logout">↪ Sign out</button></div>`;
-  $("#acc-marketing").addEventListener("change", async (e) => {
+  const setMarketing = async (on, reason) => {
     try {
-      await api("/api/me/marketing", { method: "PUT", body: JSON.stringify({ marketing: e.target.checked }) });
-      toast(e.target.checked ? "Subscribed" : "Unsubscribed");
+      await api("/api/me/marketing", { method: "PUT", body: JSON.stringify({ marketing: on, reason: reason || null }) });
+      toast(on ? "Subscribed" : "Unsubscribed");
     } catch (err) { toast(err.message, true); }
+  };
+  $("#acc-marketing").addEventListener("change", (e) => {
+    if (e.target.checked) { $("#unsub").hidden = true; setMarketing(true); return; }
+    $("#unsub").hidden = false;     // ask why before switching it off
+  });
+  $("#unsub-ok").addEventListener("click", async () => {
+    await setMarketing(false, $("#unsub-reason").value);
+    $("#unsub").hidden = true;
+  });
+  $("#unsub-cancel").addEventListener("click", () => {
+    $("#acc-marketing").checked = true;
+    $("#unsub").hidden = true;
   });
   $("#pw-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1267,7 +1290,61 @@ async function renderAccount() {
   });
 }
 
+const STAGE_NAME = { signed_up: "Signed up", channel: "Created a channel", video: "Made a video",
+  published: "Published a video", autopilot: "Runs on autopilot" };
+
+async function renderStats(days = renderStats.days || 30) {
+  await loadMe();
+  if (!isFullAdmin(me.user)) { view.innerHTML = `<div class="error-box">Only the super admin and the Studio owner see this page.</div>`; return; }
+  renderStats.days = days;
+  const s = await api(`/api/stats?days=${days}`);
+  const tile = (label, value, hint = "") => `<div class="tile"><div class="stat">${value}</div><div class="stat-label">${esc(label)}</div>${hint ? `<div class="muted small">${hint}</div>` : ""}</div>`;
+  const pct = (n) => (s.users ? Math.round((n / s.users) * 100) : 0) + "%";
+  const list = (rows, empty) => rows.length
+    ? `<table class="compact"><tbody>${rows.map((r) => `<tr><td>${esc(r.name)}</td><td style="text-align:right">${num(r.count)}</td></tr>`).join("")}</tbody></table>`
+    : `<div class="empty">${empty}</div>`;
+  const sum = (k) => s.days.reduce((a, d) => a + d[k], 0);
+  view.innerHTML = `<h1>Studio stats</h1><div class="earn">
+    <div class="actions earn-bar">
+      <div class="tabs" style="margin:0">${[7, 30, 90].map((d) => `<button class="tab ${d === days ? "active" : ""}" data-days="${d}">${d} days</button>`).join("")}</div>
+      <span class="muted">Only the Studio's own records - no YouTube data. Per person details are in Users → Subscribers CSV.</span></div>
+    <section class="card"><h2>People</h2><div class="stats stats-wide">
+      ${tile("Accounts", num(s.users))}
+      ${tile("Active, 7 days", num(s.active_7), "made, uploaded or signed in")}
+      ${tile("Active, 30 days", num(s.active_30))}
+      ${tile("On the mailing list", num(s.subscribed), pct(s.subscribed) + " of accounts")}
+      ${tile("Unsubscribed", num(s.unsubscribed))}
+    </div></section>
+    <div class="grid">
+      <section class="card"><h2>Funnel</h2>
+        ${s.funnel.map((f) => progress(STAGE_NAME[f.stage] || f.stage, f.count, s.users || 1)).join("")}
+        <p class="muted small">Each step counts everybody who got at least that far. The biggest drop is where an e-mail helps most.</p>
+      </section>
+      <section class="card"><h2>Where people come from</h2>${list(s.sources, "No sign-ups yet.")}
+        <p class="muted small">Share sign-up links like <code>${esc(location.origin)}/?ref=telegram</code> or with
+          <code>utm_source</code> / <code>utm_campaign</code>: the Studio remembers them.</p></section>
+    </div>
+    <section class="card"><h2>Last ${days} days</h2><div class="grid">
+      <div><h3>Videos made <span class="muted">· ${num(sum("videos"))}</span></h3>
+        ${barChart(s.days, { value: (d) => d.videos, label: (d) => d.date.slice(5), color: "var(--blue)", fmt: num, height: 140 })}</div>
+      <div><h3>Uploads <span class="muted">· ${num(sum("uploads"))}</span></h3>
+        ${barChart(s.days, { value: (d) => d.uploads, label: (d) => d.date.slice(5), color: "var(--green)", fmt: num, height: 140 })}</div>
+      <div><h3>Sign-ups <span class="muted">· ${num(sum("signups"))}</span></h3>
+        ${barChart(s.days, { value: (d) => d.signups, label: (d) => d.date.slice(5), color: "var(--orange)", fmt: num, height: 140 })}</div>
+    </div></section>
+    <div class="grid">
+      <section class="card"><h2>Why people unsubscribe</h2>${list(s.unsubscribe_reasons, "Nobody unsubscribed yet.")}</section>
+      <section class="card"><h2>Plans</h2>${list(s.plans.map((p) => ({ ...p, name: PLAN_NAME[p.name] || p.name })), "—")}
+        <p class="muted small">No payments yet: set a plan by hand on the Users page.</p></section>
+      <section class="card"><h2>Regions</h2>${list(s.regions, "—")}
+        <p class="muted small">From the browser's time zone at sign-in (no location tracking).</p></section>
+    </div></div>`;
+  wireCharts(view);
+  view.querySelectorAll("[data-days]").forEach((b) => b.addEventListener("click", () => renderStats(+b.dataset.days)));
+}
+
 const ROLE_NAME = { superadmin: "Super admin", owner: "Studio owner", admin: "Admin", user: "User" };
+const PLAN_NAME = { free: "Free", trial: "Trial (14 days)", pro: "Pro" };
 const isFullAdmin = (u) => u && (u.role === "superadmin" || u.role === "owner");
 const isAdmin = (u) => isFullAdmin(u) || (u && u.role === "admin");
 
@@ -1287,7 +1364,7 @@ async function renderUsers(query = renderUsers.q || "") {
       ${subs} agreed to news and offers. The CSV has only them: the date they agreed, their channels, videos made,
       uploads and platforms, and a stage (signed_up → channel → video → published → autopilot) to pick the right e-mail.</p>
     <div class="card"><table class="table users-table">
-      <thead><tr><th>E-mail / ID</th><th>Role</th><th>Channels</th><th>News</th><th>Last sign-in</th><th>Signed in</th><th></th></tr></thead>
+      <thead><tr><th>E-mail / ID</th><th>Role</th><th>Plan</th><th>Source</th><th>Channels</th><th>News</th><th>Last sign-in</th><th>Signed in</th><th></th></tr></thead>
       <tbody>${users.map((u) => `
         <tr data-id="${esc(u.id)}">
           <td><div>${esc(u.email)}${u.disabled ? ` <span class="chip error">blocked</span>` : ""}${u.id === me.user.id ? ` <span class="chip done">you</span>` : ""}</div>
@@ -1295,6 +1372,10 @@ async function renderUsers(query = renderUsers.q || "") {
           <td>${u.can.role ? `<select class="role-pick" data-u="role">${["user", "admin", "owner"].map((r) =>
             `<option value="${r}" ${r === u.role ? "selected" : ""}>${ROLE_NAME[r]}</option>`).join("")}</select>`
             : esc(ROLE_NAME[u.role] || u.role)}</td>
+          <td>${u.can.plan ? `<select class="role-pick" data-u="plan">${me.plans.map((p) =>
+            `<option value="${p}" ${p === u.plan ? "selected" : ""}>${PLAN_NAME[p] || p}</option>`).join("")}</select>`
+            : esc(PLAN_NAME[u.plan] || u.plan)}${u.trial_until ? `<div class="muted small">until ${esc(u.trial_until)}</div>` : ""}</td>
+          <td>${esc(u.source)}${u.timezone ? `<div class="muted small">${esc(u.timezone)}</div>` : ""}</td>
           <td>${u.channels.length ? u.channels.map(esc).join("<br>") : "—"}</td>
           <td>${u.marketing ? "✓ " + esc(when(u.marketing_at)) : "—"}</td>
           <td>${u.last_login ? esc(when(u.last_login)) : "—"}</td>
@@ -1304,7 +1385,7 @@ async function renderUsers(query = renderUsers.q || "") {
             ${u.can.logout ? `<button class="btn btn-text" data-u="logout" ${u.sessions ? "" : "disabled"}>↪ Log out</button>` : ""}
             ${u.can.block ? `<button class="btn btn-text" data-u="toggle">${u.disabled ? "✅ Unblock" : "⛔ Block"}</button>` : ""}
             ${u.can.delete ? `<button class="btn btn-text btn-danger" data-u="delete">🗑 Delete</button>` : ""}</td>
-        </tr>`).join("") || `<tr><td colspan="7" class="muted">Nobody found.</td></tr>`}</tbody></table></div>
+        </tr>`).join("") || `<tr><td colspan="9" class="muted">Nobody found.</td></tr>`}</tbody></table></div>
     <p class="muted small">People sign up themselves at <code>/login</code>. Block: they cannot sign in until unblocked.
       Log out: ends their Studio sessions on every device. Deleting keeps their channels: they move to you.
       ${me.user.role === "admin" ? "As an admin you can set passwords, block and log out users - not other admins, and you cannot delete accounts." : "Admins can see users and set their passwords, block and log them out; they cannot delete accounts or touch other admins."}</p>`;
@@ -1324,15 +1405,16 @@ async function renderUsers(query = renderUsers.q || "") {
   }));
   view.querySelectorAll(".role-pick").forEach((sel) => sel.addEventListener("change", async () => {
     const id = sel.closest("tr").dataset.id;
+    const field = sel.dataset.u;   // role | plan
     try {
-      await api(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ role: sel.value }) });
-      toast(`Role: ${ROLE_NAME[sel.value]}`);
+      await api(`/api/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ [field]: sel.value }) });
+      toast(field === "plan" ? `Plan: ${PLAN_NAME[sel.value]}` : `Role: ${ROLE_NAME[sel.value]}`);
     } catch (err) { toast(err.message, true); }
     renderUsers();
   }));
   view.querySelectorAll("tr[data-id]").forEach((row) => row.addEventListener("click", async (e) => {
     const act = e.target.dataset.u;
-    if (!act || act === "role") return;
+    if (!act || act === "role" || act === "plan") return;
     const id = row.dataset.id;
     const u = users.find((x) => x.id === id);
     const url = `/api/users/${encodeURIComponent(id)}`;
