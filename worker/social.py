@@ -51,7 +51,8 @@ PLATFORMS = {
         "name": "TikTok", "dev_url": "https://developers.tiktok.com/apps",
         "auth_url": "https://www.tiktok.com/v2/auth/authorize/",
         "token_url": "https://open.tiktokapis.com/v2/oauth/token/",
-        "scopes": ["user.info.basic", "video.publish"]   # video.list (Earnings) after TikTok approves it, "scope_sep": ",", "client_param": "client_key",
+        # video.list (Earnings) joins after TikTok approves it
+        "scopes": ["user.info.basic", "video.publish"], "scope_sep": ",", "client_param": "client_key",
         "how": "TikTok for Developers: create an app, add Login Kit + Content Posting API (Direct Post), "
                "add the redirect URI below. Until TikTok audits the app, posts can only be private (Only me).",
     },
