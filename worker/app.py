@@ -110,6 +110,7 @@ class PublishRequest(BaseModel):
     mode: str = "private"               # private | schedule | public
     platforms: list[str] = ["youtube"]
     direct: bool = False                # post from the worker now instead of through n8n
+    tiktok: dict | None = None          # the TikTok form: privacy, title, comment/duet/stitch, disclose/your_brand/branded
 
 
 class SocialPostRequest(BaseModel):
@@ -944,6 +945,15 @@ def start_variants(job_id, count, actor=None):
 notify.on_variants = start_variants
 
 
+@app.get("/api/jobs/{job_id}/tiktok")
+def tiktok_form(job_id: str):
+    """The TikTok post form: the connected creator, their allowed privacy levels and the default caption."""
+    try:
+        return social.tiktok_creator(job_id)
+    except Exception as e:
+        _fail(e)
+
+
 @app.post("/api/jobs/{job_id}/publish")
 def publish(job_id: str, req: PublishRequest):
     """Post the video to the chosen platforms: normally through n8n (which keeps a log of every
@@ -958,8 +968,21 @@ def publish(job_id: str, req: PublishRequest):
         missing = [social.PLATFORMS[p]["name"] for p in platforms if not social._account(p)]
         if missing:
             raise social.SocialError("not connected: " + ", ".join(missing) + " (Accounts page)")
+        tiktok = social.tiktok_options(req.tiktok) if "tiktok" in platforms and req.tiktok is not None else None
     except Exception as e:
         _fail(e)
+    if tiktok:   # the creator's TikTok choices only travel with a post from the worker, never through n8n
+        def run_tiktok():
+            try:
+                social.post("tiktok", job_id, req.mode, tiktok)
+            except Exception:
+                traceback.print_exc()
+
+        social.mark_queued(job_id, ["tiktok"], req.mode)
+        space.thread(run_tiktok)
+        platforms = [p for p in platforms if p != "tiktok"]
+        if not platforms:
+            return {"queued": job_id, "platforms": ["tiktok"], "via": "worker"}
     if req.direct:
         def run():
             for p in platforms:

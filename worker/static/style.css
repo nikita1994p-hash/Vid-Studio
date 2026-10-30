@@ -450,3 +450,14 @@ label.inline input { width: 84px !important; margin-top: 0 !important; }
 .unsub { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .unsub .actions { margin-top: 8px; }
 .unsub select { width: auto; margin-top: 0; }
+
+/* TikTok post form (TikTok's posting rules: who posts, privacy with no default, interactions, disclosure, consent) */
+.tt-form { display: grid; gap: 16px; margin: 4px 0 16px; padding: 18px; border-radius: var(--radius-sm);
+  background: var(--panel-2); box-shadow: 0 0 0 1px var(--line) inset; }
+.tt-who { display: flex; align-items: center; gap: 12px; }
+.tt-who img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
+.tt-group { display: grid; gap: 8px; }
+.tt-label { font-size: 13px; color: var(--muted); }
+.tt-disclose { display: grid; gap: 8px; padding-left: 16px; border-left: 2px solid var(--line-strong); }
+.tt-form p { margin: 0; }
+.tt-hint { display: block; margin-top: 2px; }

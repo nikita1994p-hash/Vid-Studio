@@ -596,17 +596,62 @@ def _post_threads(acct, job_id, video, result, mode):
     return {"url": link.get("permalink"), "id": post_["id"]}
 
 
-def _post_tiktok(acct, job_id, video, result, mode):
+def _creator_info(acct):
+    return _call("POST", "https://open.tiktokapis.com/v2/post/publish/creator_info/query/", json_body={},
+                 headers={"Authorization": f"Bearer {acct['access_token']}"}).get("data", {})
+
+
+def tiktok_creator(job_id=None):
+    """What TikTok's posting rules say the post form must show: who posts, the privacy levels this
+    creator may pick, which interactions they switched off, the longest video they may post."""
+    info = _creator_info(_token("tiktok"))
+    result = (pipeline.load_job(job_id).get("result") or {}) if job_id else {}
+    return {"nickname": info.get("creator_nickname"), "username": info.get("creator_username"),
+            "avatar": info.get("creator_avatar_url"),
+            "privacy_options": info.get("privacy_level_options") or [],
+            "comment_disabled": bool(info.get("comment_disabled")), "duet_disabled": bool(info.get("duet_disabled")),
+            "stitch_disabled": bool(info.get("stitch_disabled")),
+            "max_seconds": info.get("max_video_post_duration_sec"),
+            "seconds": result.get("seconds"), "caption": _caption(result, 2200) if result else ""}
+
+
+def tiktok_options(opts):
+    """The creator's choices from the Studio's TikTok form, checked the way TikTok checks them."""
+    o = dict(opts or {})
+    if not o.get("privacy"):
+        raise SocialError("TikTok: choose who can see the video")
+    if o.get("disclose") and not (o.get("your_brand") or o.get("branded")):
+        raise SocialError("TikTok: say whether the video promotes yourself, a third party, or both")
+    if o.get("branded") and o["privacy"] == "SELF_ONLY":
+        raise SocialError("TikTok: branded content cannot be private (Only me)")
+    o["title"] = str(o.get("title") or "")[:2200]
+    return o
+
+
+def _post_tiktok(acct, job_id, video, result, mode, opts=None):
     bearer = {"Authorization": f"Bearer {acct['access_token']}"}
-    info = _call("POST", "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
-                 json_body={}, headers=bearer).get("data", {})
+    info = _creator_info(acct)
     allowed = info.get("privacy_level_options") or ["SELF_ONLY"]
-    privacy = "PUBLIC_TO_EVERYONE" if mode == "public" and "PUBLIC_TO_EVERYONE" in allowed else (
-        "SELF_ONLY" if "SELF_ONLY" in allowed else allowed[0])
+    if opts:   # the creator filled in the TikTok form in the Studio
+        if opts["privacy"] not in allowed:
+            raise SocialError(f"TikTok does not allow {opts['privacy']} for this account now")
+        privacy = opts["privacy"]
+        post_info = {"title": opts["title"],
+                     "disable_comment": not opts.get("comment") or bool(info.get("comment_disabled")),
+                     "disable_duet": not opts.get("duet") or bool(info.get("duet_disabled")),
+                     "disable_stitch": not opts.get("stitch") or bool(info.get("stitch_disabled")),
+                     "brand_organic_toggle": bool(opts.get("disclose") and opts.get("your_brand")),
+                     "brand_content_toggle": bool(opts.get("disclose") and opts.get("branded"))}
+    else:      # autopilot / n8n: no form, so the safest level
+        privacy = "PUBLIC_TO_EVERYONE" if mode == "public" and "PUBLIC_TO_EVERYONE" in allowed else (
+            "SELF_ONLY" if "SELF_ONLY" in allowed else allowed[0])
+        post_info = {"title": _caption(result, 2200),
+                     "disable_duet": False, "disable_comment": False, "disable_stitch": False}
+    longest = info.get("max_video_post_duration_sec")
+    if longest and (result.get("seconds") or 0) > longest:
+        raise SocialError(f"TikTok takes videos up to {longest} s from this account; this one is {result['seconds']:.0f} s")
     init = _call("POST", "https://open.tiktokapis.com/v2/post/publish/video/init/", headers=bearer, json_body={
-        "post_info": {"title": _caption(result, 2200), "privacy_level": privacy,
-                      "disable_duet": False, "disable_comment": False, "disable_stitch": False,
-                      "is_aigc": flag("AI_DISCLOSURE", "true")},
+        "post_info": {**post_info, "privacy_level": privacy, "is_aigc": flag("AI_DISCLOSURE", "true")},
         "source_info": {"source": "FILE_UPLOAD", "video_size": len(video), "chunk_size": len(video),
                         "total_chunk_count": 1}}).get("data", {})
     _call("PUT", init["upload_url"], body=video, timeout=900, headers={
@@ -666,8 +711,9 @@ def mark_queued(job_id, platforms, mode):
         _mark(job_id, p, state="queued", mode=mode)
 
 
-def post(platform, job_id, mode="auto"):
-    """Upload one finished video to one platform; the result lands in the video's status."""
+def post(platform, job_id, mode="auto", opts=None):
+    """Upload one finished video to one platform; the result lands in the video's status.
+    opts: the TikTok form's choices (tiktok_options), when the creator posts from the Studio."""
     p = _check(platform)
     data = pipeline.load_job(job_id)
     if data["status"]["state"] != "done" or not data["result"]:
@@ -688,7 +734,7 @@ def post(platform, job_id, mode="auto"):
     _mark(job_id, platform, state="uploading", mode=mode, account=who)
     try:
         video = (pipeline.job_dir(job_id) / "final.mp4").read_bytes()
-        out = POSTERS[platform](acct, job_id, video, data["result"], mode)
+        out = POSTERS[platform](acct, job_id, video, data["result"], mode, *([opts] if opts else []))
     except Exception as e:
         _mark(job_id, platform, state="error", mode=mode, error=str(e)[:500], account=who)
         notify.send("error", f"❌ {p['name']}: posting “{data['result'].get('title')}” failed\n{str(e)[:300]}\n"

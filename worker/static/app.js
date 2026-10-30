@@ -226,14 +226,23 @@ async function renderVideo(id) {
     try { await api(`/api/jobs/${encodeURIComponent(id)}`, { method: "DELETE" }); toast("Deleted"); location.hash = "#/content"; }
     catch (e) { toast(e.message, true); }
   });
+  const ttBox = $("#tiktok-form");
+  const ttTick = view.querySelector("input[name=platform][value=tiktok]");
+  ttTick?.addEventListener("change", () => (ttTick.checked ? tiktokForm(ttBox, id) : (ttBox.hidden = true)));
   $("#publish-btn")?.addEventListener("click", async () => {
     const mode = $("input[name=mode]:checked").value;
     const platforms = [...view.querySelectorAll("input[name=platform]:checked")].map((x) => x.value);
     if (!platforms.length) return toast("Tick at least one platform", true);
     const direct = $("#publish-direct").checked;
+    let tiktok = null;
+    if (platforms.includes("tiktok")) {
+      tiktok = tiktokChoices(ttBox);
+      if (typeof tiktok === "string") return toast(tiktok, true);
+    }
     try {
-      await api(`/api/jobs/${encodeURIComponent(id)}/publish`, { method: "POST", body: JSON.stringify({ mode, platforms, direct }) });
-      toast(direct ? "Posting from the Studio…" : "Sent to n8n — it posts in a minute or two");
+      await api(`/api/jobs/${encodeURIComponent(id)}/publish`, { method: "POST", body: JSON.stringify({ mode, platforms, direct, tiktok }) });
+      if (tiktok) toast("Sent to TikTok. It may take a few minutes for the video to appear on your profile.");
+      else toast(direct ? "Posting from the Studio…" : "Sent to n8n — it posts in a minute or two");
       route();
     } catch (e) { toast(e.message, true); }
   });
@@ -315,6 +324,7 @@ function publishCard(status, accounts) {
   return `<section class="card" style="margin-top:16px"><h3>Publish</h3>
     ${none ? `<p class="muted">No account connected yet — <a href="#/accounts">Accounts</a>.</p>` : ""}
     <div class="platforms">${rows}</div>
+    <div id="tiktok-form" class="tt-form" hidden></div>
     <div class="radio-row">
       <label><input type="radio" name="mode" value="private" checked> Private / only me (review first)</label>
       <label><input type="radio" name="mode" value="schedule"> YouTube: schedule · ${esc(health?.publish || "")}</label>
@@ -323,7 +333,80 @@ function publishCard(status, accounts) {
     <label class="check"><input type="checkbox" id="publish-direct"> Post directly from the Studio (without n8n)</label>
     <button class="btn btn-primary" id="publish-btn" ${none ? "disabled" : ""}>Publish</button>
     <span class="muted" style="margin-left:8px">Marked as AI-generated where the platform supports it.
-      Instagram, Facebook and X have no private mode: there "Private" still posts publicly.</span></section>`;
+      Instagram, Facebook and X have no private mode: there "Private" still posts publicly.
+      TikTok uses its own choices above.</span></section>`;
+}
+
+// TikTok's posting rules: show who posts, let the creator pick the privacy (no default), the
+// interactions (off by default) and the commercial disclosure, and show the consent line.
+const TT_PRIVACY = { PUBLIC_TO_EVERYONE: "Everyone", MUTUAL_FOLLOW_FRIENDS: "Friends",
+  FOLLOWER_OF_CREATOR: "Followers", SELF_ONLY: "Only me" };
+const TT_MUSIC = "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en";
+const TT_BRANDED = "https://www.tiktok.com/legal/page/global/bc-policy/en";
+
+async function tiktokForm(box, id) {
+  box.hidden = false;
+  box.innerHTML = `<p class="muted">Asking TikTok about your account…</p>`;
+  let c;
+  try { c = await api(`/api/jobs/${encodeURIComponent(id)}/tiktok`); }
+  catch (e) { box.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; return; }
+  const tooLong = c.max_seconds && c.seconds > c.max_seconds;
+  const allow = (key, label, off) => `<label class="check"><input type="checkbox" name="tt-${key}" ${off ? "disabled" : ""}>
+    ${label}${off ? ` <span class="muted small">(turned off in your TikTok settings)</span>` : ""}</label>`;
+  box.innerHTML = `
+    <div class="tt-who">${c.avatar ? `<img src="${esc(c.avatar)}" alt="">` : ""}
+      <div><b>${esc(c.nickname || "TikTok account")}</b><div class="muted small">@${esc(c.username || "")}</div></div></div>
+    ${tooLong ? `<div class="error-box">This video is ${Math.round(c.seconds)} s; your account can post up to ${c.max_seconds} s.</div>` : ""}
+    <label>Caption<textarea name="tt-title" rows="4" maxlength="2200">${esc(c.caption)}</textarea></label>
+    <label>Who can view this video
+      <select name="tt-privacy"><option value="" selected disabled>Choose…</option>
+        ${c.privacy_options.map((p) => `<option value="${esc(p)}">${esc(TT_PRIVACY[p] || p)}</option>`).join("")}</select></label>
+    <div class="tt-group"><span class="tt-label">Allow users to</span>
+      ${allow("comment", "Comment", c.comment_disabled)}${allow("duet", "Duet", c.duet_disabled)}${allow("stitch", "Stitch", c.stitch_disabled)}</div>
+    <div class="tt-group">
+      <label class="check"><input type="checkbox" name="tt-disclose">
+        <span>Disclose video content<span class="tt-hint muted small">This video promotes goods or services in exchange for something of value.</span></span></label>
+      <div class="tt-disclose" hidden>
+        <label class="check"><input type="checkbox" name="tt-your_brand">
+        <span>Your brand<span class="tt-hint muted small">You are promoting yourself or your own business.</span></span></label>
+        <label class="check"><input type="checkbox" name="tt-branded">
+        <span>Branded content<span class="tt-hint muted small">You are promoting another brand or a third party.</span></span></label>
+        <p class="tt-note muted small"></p>
+      </div></div>
+    <p class="tt-consent muted small"></p>
+    <p class="muted small">Marked as AI-generated content on TikTok. After posting, TikTok may take a few minutes to process the video.</p>`;
+  const q = (n) => box.querySelector(`[name=tt-${n}]`);
+  const sync = () => {
+    const on = q("disclose").checked, yours = on && q("your_brand").checked, paid = on && q("branded").checked;
+    box.querySelector(".tt-disclose").hidden = !on;
+    box.querySelector(".tt-note").textContent = !on ? "" : !yours && !paid
+      ? "Pick at least one: Your brand or Branded content."
+      : `Your video will be labeled “${paid ? "Paid partnership" : "Promotional content"}”.`;
+    const self = q("privacy").querySelector("option[value=SELF_ONLY]");   // branded content cannot be private
+    if (self) {
+      self.disabled = paid;
+      self.textContent = paid ? "Only me (not available for branded content)" : "Only me";
+      if (paid && q("privacy").value === "SELF_ONLY") q("privacy").value = "";
+    }
+    box.querySelector(".tt-consent").innerHTML = paid
+      ? `By posting, you agree to TikTok's <a href="${TT_BRANDED}" target="_blank" rel="noopener">Branded Content Policy</a>
+         and <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a>.`
+      : `By posting, you agree to TikTok's <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a>.`;
+    $("#publish-btn").disabled = tooLong;
+  };
+  ["disclose", "your_brand", "branded", "privacy"].forEach((n) => q(n).addEventListener("change", sync));
+  sync();
+}
+
+function tiktokChoices(box) {
+  const q = (n) => box.querySelector(`[name=tt-${n}]`);
+  if (!q("privacy")) return "Wait for the TikTok form to load";
+  const o = { title: q("title").value, privacy: q("privacy").value, comment: q("comment").checked,
+    duet: q("duet").checked, stitch: q("stitch").checked, disclose: q("disclose").checked,
+    your_brand: q("your_brand").checked, branded: q("branded").checked };
+  if (!o.privacy) return "TikTok: choose who can view this video";
+  if (o.disclose && !o.your_brand && !o.branded) return "TikTok: pick Your brand or Branded content";
+  return o;
 }
 
 const SEVERITY = { high: "error", medium: "uploading", low: "queued" };
