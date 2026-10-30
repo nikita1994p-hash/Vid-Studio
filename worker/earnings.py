@@ -188,7 +188,8 @@ def _x(stats, posts):
                                                "comments": m.get("reply_count", 0)}
 
 
-FETCHERS = {"youtube": _youtube, "tiktok": _tiktok, "instagram": _instagram, "threads": _threads, "x": _x}
+# TikTok (_tiktok) joins once TikTok approves the video.list scope; until then the app does not ask for it
+FETCHERS = {"youtube": _youtube, "instagram": _instagram, "threads": _threads, "x": _x}
 
 
 def refresh():
