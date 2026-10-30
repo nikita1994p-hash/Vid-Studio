@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -257,7 +257,7 @@ def _no_channel(request, e):
 
 # ------------------------------------------------------------------ sessions and channels
 
-OPEN = ("/login", "/pricing", "/static/", "/api/auth/", "/health")
+OPEN = ("/login", "/pricing", "/static/", "/api/auth/", "/health", "/tiktok")
 INTERNAL = ("/produce", "/social/", "/jobs/", "/n8n/")   # n8n inside Docker; no browser, no cookie
 
 
@@ -699,6 +699,15 @@ def invite_check(code: str):
 @app.get("/pricing")
 def pricing_page():
     return HTMLResponse((STATIC / "pricing.html").read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/tiktok{code}.txt")
+def tiktok_verification(code: str):
+    """TikTok's site check for the public address: the file it gave you goes in data/verify/."""
+    f = pipeline.DATA / "verify" / f"tiktok{code}.txt"
+    if not code.isalnum() or not f.is_file():
+        raise HTTPException(404)
+    return PlainTextResponse(f.read_text(encoding="utf-8"))
 
 
 @app.get("/api/invites")
