@@ -1211,6 +1211,15 @@ def get_accounts(request: Request):
     return social.accounts(_base(request))
 
 
+@app.get("/api/accounts/{platform}/avatar")
+def account_avatar(platform: str):
+    try:
+        return FileResponse(social.avatar(platform), media_type="image/jpeg",
+                            headers={"Cache-Control": "private, max-age=86400"})
+    except Exception as e:
+        _fail(e)
+
+
 @app.put("/api/accounts/{platform}/app")
 def put_app_keys(platform: str, req: AppKeysRequest):
     try:

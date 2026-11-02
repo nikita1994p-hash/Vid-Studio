@@ -144,7 +144,9 @@ def accounts(base=None):
             "needs_config": p.get("config", False), "config_id": app.get("config_id", ""),
             "account_id": app.get("account_id", ""),
             "connected": bool(acct.get("access_token")),
-            "account": acct.get("profile"),
+            # platform avatar links expire (TikTok's in a day): the Studio serves its own copy
+            "account": acct.get("profile") and {**acct["profile"], "avatar": acct["profile"].get("avatar") and
+                                                f"/api/accounts/{key}/avatar?v={hashlib.md5(acct['profile']['avatar'].encode()).hexdigest()[:8]}"},
             "pages": [{"id": x["id"], "name": x["name"]} for x in acct.get("pages", [])],
             "page_id": acct.get("page_id"),
             "connected_at": acct.get("connected_at"),
@@ -177,6 +179,36 @@ def logout(platform):
     _check(platform)
     _path(f"{platform}.json").unlink(missing_ok=True)
     return {"logged_out": platform}
+
+
+def avatar(platform):
+    """The logged-in account's picture, kept next to the login. Fetched again when the profile's picture
+    changed; a link that has expired is renewed by reading the profile once more."""
+    _check(platform)
+    acct = _account(platform) or {}
+    url = (acct.get("profile") or {}).get("avatar")
+    if not url:
+        raise SocialError(f"{platform} has no avatar")
+    f = _path(f"{platform}.avatar")
+    if f.is_file() and acct.get("avatar_from") == url:
+        return f
+    try:
+        data = _download(url)
+    except (urllib.error.URLError, OSError):
+        acct = _token(platform)
+        acct.update(_profile(platform, acct))
+        url = acct["profile"].get("avatar")
+        data = _download(url)
+    f.write_bytes(data)
+    acct["avatar_from"] = url
+    _save_account(platform, acct)
+    return f
+
+
+def _download(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "VidAuto/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.read()
 
 
 def choose_page(platform, page_id):
