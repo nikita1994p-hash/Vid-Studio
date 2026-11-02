@@ -191,6 +191,7 @@ SETTINGS_SCHEMA = [
     {"key": "YOUTUBE_CATEGORY_ID", "group": "Publishing", "label": "YouTube category id (27 = Education, 22 = People)", "type": "text", "default": "27"},
     # money
     {"key": "DESCRIPTION_CTA", "group": "Monetization", "label": "Line added to every description (your link: newsletter, affiliate, product)", "type": "text"},
+    {"key": "FOLLOW_CTA", "group": "Monetization", "label": "The same line for TikTok, Instagram, Threads, Facebook and X, where people follow rather than subscribe (empty = the line above)", "type": "text"},
     {"key": "MONTHLY_COSTS", "group": "Monetization", "label": "Fixed monthly costs, $ (subscriptions, tools)", "type": "number", "min": 0, "max": 10000, "step": 1, "default": "0"},
     # models
     {"key": "TEXT_MODEL", "group": "AI models", "label": "Script model", "type": "text", "default": "gemini-3.8-flash"},

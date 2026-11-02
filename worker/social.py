@@ -491,10 +491,16 @@ def _token(platform):
 
 def _caption(result, limit, with_title=True):
     title, desc = result.get("title") or "", result.get("description") or ""
+    # YouTube asks to subscribe, the rest to follow; a video made before the line existed gets it here too
+    cta, follow = env("DESCRIPTION_CTA"), env("FOLLOW_CTA") or env("DESCRIPTION_CTA")
+    if cta and cta in desc:
+        desc = desc.replace(cta, follow)
+    elif follow and follow not in desc:
+        desc = f"{desc}\n\n{follow}".strip()
     tags = " ".join(w for w in desc.split() if w.startswith("#"))
     text = f"{title}\n\n{desc}" if with_title else desc
-    if len(text) > limit:
-        text = (f"{title} {tags}" if with_title else tags).strip()
+    if len(text) > limit:  # keep the follow line when the description has to go
+        text = "\n\n".join(x for x in (title if with_title else "", follow, tags) if x)
     return text[:limit]
 
 
