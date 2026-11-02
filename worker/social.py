@@ -142,6 +142,7 @@ def accounts(base=None):
             "app_configured": _app_ready(p, app),
             "client_id": app.get("client_id", ""),
             "needs_config": p.get("config", False), "config_id": app.get("config_id", ""),
+            "account_id": app.get("account_id", ""),
             "connected": bool(acct.get("access_token")),
             "account": acct.get("profile"),
             "pages": [{"id": x["id"], "name": x["name"]} for x in acct.get("pages", [])],
@@ -157,7 +158,7 @@ def _app_ready(p, app):
     return bool(app.get("client_id") and app.get("client_secret") and (app.get("config_id") or not p.get("config")))
 
 
-def save_app(platform, client_id, client_secret, config_id=""):
+def save_app(platform, client_id, client_secret, config_id="", account_id=""):
     _check(platform)
     apps = _apps()
     old = apps.get(platform) or {}
@@ -166,6 +167,8 @@ def save_app(platform, client_id, client_secret, config_id=""):
                       "client_secret": (client_secret or "").strip() or old.get("client_secret", "")}
     if (config_id or "").strip():
         apps[platform]["config_id"] = config_id.strip()
+    if (account_id or "").strip():
+        apps[platform]["account_id"] = account_id.strip()
     pipeline._write_json(_path("apps.json"), apps)
     return {"saved": platform}
 
@@ -301,7 +304,12 @@ def finish_login(platform, code, state):
             "expires_at": time.time() + float(tok["expires_in"]) if tok.get("expires_in") else None,
             "user_id": tok.get("user_id") or tok.get("open_id"),
             "connected_at": pipeline._now()}
-    acct.update(_profile(platform, acct))
+    try:
+        acct.update(_profile(platform, acct))
+    except SocialError:
+        # keep the login (private data/ folder) so the account lookup can be worked out without logging in again
+        pipeline._write_json(_path(f"{platform}.failed.json"), acct)
+        raise
     _save_account(platform, acct)
     return acct.get("profile")
 
@@ -348,9 +356,7 @@ def _profile(platform, acct):
                             "url": f"https://facebook.com/{first['id']}"}}
     if platform == "instagram":
         ids = _ig_accounts(t)
-        if not ids:
-            raise SocialError("no Instagram account was shared with the app - tick it in the login window")
-        me = _call("GET", f"{GRAPH}/{ids[0]}", params={"fields": "id,username,profile_picture_url",
+        me =_call("GET", f"{GRAPH}/{ids[0]}", params={"fields": "id,username,profile_picture_url",
                                                       "access_token": t})
         return {"user_id": me["id"],
                 "profile": {"id": me["id"], "name": "@" + me.get("username", ""),
@@ -378,16 +384,47 @@ def _profile(platform, acct):
 def _ig_accounts(token):
     """Instagram accounts this login may use: Facebook Login for Business lists them per permission."""
     app = _apps()["instagram"]
+    if app.get("account_id"):
+        # a system-user token reaches the portfolio's account but cannot list it: the ID from the portfolio settings
+        return [app["account_id"]]
     info = _call("GET", f"{GRAPH}/debug_token", params={
         "input_token": token, "access_token": f"{app['client_id']}|{app['client_secret']}"}).get("data") or {}
     for scope in ("instagram_content_publish", "instagram_basic"):
         for s in info.get("granular_scopes") or []:
             if s.get("scope") == scope and s.get("target_ids"):
                 return s["target_ids"]
+    found, tried = [], []
+
+    def look(what, fn):
+        try:
+            found.extend(i for i in fn() if i not in found)
+            tried.append(f"{what}: {len(found)}")
+        except SocialError as e:
+            tried.append(f"{what}: {str(e)[:80]}")
+
     # an older login sees the account through the Facebook Page it is linked to
-    pages = _call("GET", f"{GRAPH}/me/accounts", params={"fields": "instagram_business_account",
-                                                         "access_token": token}).get("data") or []
-    return [x["instagram_business_account"]["id"] for x in pages if x.get("instagram_business_account")]
+    look("pages", lambda: [x["instagram_business_account"]["id"] for x in _call(
+        "GET", f"{GRAPH}/me/accounts", params={"fields": "instagram_business_account", "access_token": token}
+    ).get("data") or [] if x.get("instagram_business_account")])
+    # a system-user login (Unified login) sees the accounts assigned to it in the business portfolio
+    look("assigned", lambda: [x["id"] for x in _call("GET", f"{GRAPH}/me/assigned_instagram_accounts", params={
+        "access_token": token}).get("data") or []])
+    biz = []
+    if not found:
+        look("businesses", lambda: biz.extend(_call("GET", f"{GRAPH}/me/businesses", params={
+            "access_token": token}).get("data") or []) or [])
+    for b in biz:
+        for edge in ("owned_instagram_accounts", "instagram_accounts"):
+            look(edge, lambda: [x["id"] for x in _call("GET", f"{GRAPH}/{b['id']}/{edge}", params={
+                "access_token": token}).get("data") or []])
+    if not found:
+        scopes = ", ".join(f"{s.get('scope')}({len(s.get('target_ids') or [])})"
+                           for s in info.get("granular_scopes") or [])
+        print(f"instagram login: no account; type={info.get('type')} scopes={scopes} tried={tried}", flush=True)
+        raise SocialError(f"cannot find the Instagram account - paste its ID (business.facebook.com -> Settings -> "
+                          f"Instagram accounts) into App keys -> Instagram account ID, then Connect again "
+                          f"(token {info.get('type')}, scopes: {scopes or 'none'}; {'; '.join(tried)})")
+    return found
 
 
 def _token(platform):

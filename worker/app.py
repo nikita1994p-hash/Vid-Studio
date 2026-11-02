@@ -131,6 +131,7 @@ class AppKeysRequest(BaseModel):
     client_id: str
     client_secret: str = ""             # empty keeps the saved secret
     config_id: str = ""                 # Instagram's Facebook Login for Business configuration
+    account_id: str = ""                # Instagram account ID, when the login cannot list it
 
 
 class PageRequest(BaseModel):
@@ -1213,7 +1214,7 @@ def get_accounts(request: Request):
 @app.put("/api/accounts/{platform}/app")
 def put_app_keys(platform: str, req: AppKeysRequest):
     try:
-        return social.save_app(platform, req.client_id, req.client_secret, req.config_id)
+        return social.save_app(platform, req.client_id, req.client_secret, req.config_id, req.account_id)
     except Exception as e:
         _fail(e)
 

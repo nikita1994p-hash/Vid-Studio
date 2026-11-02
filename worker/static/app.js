@@ -822,7 +822,9 @@ function accountCard(a) {
         <label>${a.id === "tiktok" ? "Client secret" : "Client secret / App secret"}
           <input name="client_secret" type="password" autocomplete="off" placeholder="${a.app_configured ? "saved — leave empty to keep" : ""}" ${a.app_configured ? "" : "required"}></label>
         ${a.needs_config ? `<label>Configuration ID <span class="muted">(config_id in the Login URL)</span>
-          <input name="config_id" value="${esc(a.config_id)}" required autocomplete="off" inputmode="numeric"></label>` : ""}
+          <input name="config_id" value="${esc(a.config_id)}" required autocomplete="off" inputmode="numeric"></label>
+        <label>Instagram account ID <span class="muted">(optional: business portfolio → Instagram accounts)</span>
+          <input name="account_id" value="${esc(a.account_id)}" autocomplete="off" inputmode="numeric"></label>` : ""}
         <button class="btn btn-outline">Save app keys</button>
       </form>
     </details></section>`;
