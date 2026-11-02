@@ -155,11 +155,11 @@ def _tiktok(stats, posts):
 def _instagram(stats, posts):
     t = social._token("instagram")["access_token"]
     for p in (x for x in posts if x["platform"] == "instagram" and x["id"]):
-        m = social._call("GET", f"{social.IG_GRAPH}/{p['id']}",
+        m = social._call("GET", f"{social.GRAPH}/{p['id']}",
                          params={"fields": "like_count,comments_count", "access_token": t})
         views = 0
         try:
-            ins = social._call("GET", f"{social.IG_GRAPH}/{p['id']}/insights", params={"metric": "views", "access_token": t})
+            ins = social._call("GET", f"{social.GRAPH}/{p['id']}/insights", params={"metric": "views", "access_token": t})
             views = ((ins.get("data") or [{}])[0].get("values") or [{}])[0].get("value", 0)
         except PipelineError:
             pass

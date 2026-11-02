@@ -28,7 +28,6 @@ import space
 from pipeline import DATA, PipelineError, env, flag
 
 GRAPH = "https://graph.facebook.com/v21.0"
-IG_GRAPH = "https://graph.instagram.com/v21.0"
 THREADS = "https://graph.threads.net/v1.0"
 
 PLATFORMS = {
@@ -58,11 +57,12 @@ PLATFORMS = {
     },
     "instagram": {
         "name": "Instagram", "dev_url": "https://developers.facebook.com/apps",
-        "auth_url": "https://www.instagram.com/oauth/authorize",
-        "token_url": "https://api.instagram.com/oauth/access_token",
-        "scopes": ["instagram_business_basic", "instagram_business_content_publish", "instagram_business_manage_insights"], "scope_sep": ",",
-        "how": "Meta for Developers: app with 'Instagram API with Instagram Login', a Business or Creator "
-               "Instagram account, add the redirect URI below.",
+        # Facebook Login for Business ("Unified login"): the configuration holds the permissions, not a scope list
+        "auth_url": "https://www.facebook.com/v21.0/dialog/oauth",
+        "token_url": f"{GRAPH}/oauth/access_token", "token_method": "GET",
+        "scopes": [], "config": True, "auth_extra": {"override_default_response_type": "true"},
+        "how": "Meta for Developers: app with the Instagram API use case -> API setup with Unified login: create a "
+               "configuration, register the redirect URI below, then paste the App ID, App secret and Configuration ID.",
     },
     "facebook": {
         "name": "Facebook Page", "dev_url": "https://developers.facebook.com/apps",
@@ -139,8 +139,9 @@ def accounts(base=None):
         out.append({
             "id": key, "name": p["name"], "how": p["how"], "dev_url": p["dev_url"],
             "redirect_uri": redirect_uri(key, base),
-            "app_configured": bool(app.get("client_id") and app.get("client_secret")),
+            "app_configured": _app_ready(p, app),
             "client_id": app.get("client_id", ""),
+            "needs_config": p.get("config", False), "config_id": app.get("config_id", ""),
             "connected": bool(acct.get("access_token")),
             "account": acct.get("profile"),
             "pages": [{"id": x["id"], "name": x["name"]} for x in acct.get("pages", [])],
@@ -152,13 +153,19 @@ def accounts(base=None):
     return out
 
 
-def save_app(platform, client_id, client_secret):
+def _app_ready(p, app):
+    return bool(app.get("client_id") and app.get("client_secret") and (app.get("config_id") or not p.get("config")))
+
+
+def save_app(platform, client_id, client_secret, config_id=""):
     _check(platform)
     apps = _apps()
     old = apps.get(platform) or {}
     apps[platform] = {"client_id": (client_id or "").strip(),
                       # an empty secret field keeps the saved one: the page never shows secrets back
                       "client_secret": (client_secret or "").strip() or old.get("client_secret", "")}
+    if (config_id or "").strip():
+        apps[platform]["config_id"] = config_id.strip()
     pipeline._write_json(_path("apps.json"), apps)
     return {"saved": platform}
 
@@ -242,7 +249,7 @@ def start_login(platform, base=None):
     """The platform's consent-page URL. Remembers state (and the PKCE verifier) for the callback."""
     p = _check(platform)
     app = _apps().get(platform) or {}
-    if not app.get("client_id") or not app.get("client_secret"):
+    if not _app_ready(p, app):
         raise SocialError(f"first paste the {p['name']} app keys (Accounts -> {p['name']} -> App keys)")
     state = secrets.token_urlsafe(24)
     pending = pipeline._read_json(_path("pending.json"), {}) or {}
@@ -251,6 +258,9 @@ def start_login(platform, base=None):
     q = {p.get("client_param", "client_id"): app["client_id"], "redirect_uri": entry["redirect_uri"],
          "response_type": "code", "scope": p.get("scope_sep", " ").join(p["scopes"]), "state": state,
          **p.get("auth_extra", {})}
+    if p.get("config"):
+        del q["scope"]
+        q["config_id"] = app["config_id"]
     if p.get("pkce"):
         verifier = secrets.token_urlsafe(48)
         entry["verifier"] = verifier
@@ -298,15 +308,12 @@ def finish_login(platform, code, state):
 
 def _long_lived(platform, tok, app):
     """Meta hands out one-hour tokens; swap them for the long-lived kind (60 days / no expiry for Pages)."""
-    if platform == "facebook":
+    # Instagram's system-user token never expires; only a one-hour user token needs the swap
+    if platform == "facebook" or (platform == "instagram" and tok.get("expires_in")
+                                  and float(tok["expires_in"]) < 86400):
         return _call("GET", f"{GRAPH}/oauth/access_token", params={
             "grant_type": "fb_exchange_token", "client_id": app["client_id"],
             "client_secret": app["client_secret"], "fb_exchange_token": tok["access_token"]})
-    if platform == "instagram":
-        long = _call("GET", "https://graph.instagram.com/access_token", params={
-            "grant_type": "ig_exchange_token", "client_secret": app["client_secret"],
-            "access_token": tok["access_token"]})
-        return {**long, "user_id": tok.get("user_id")}
     if platform == "threads":
         long = _call("GET", "https://graph.threads.net/access_token", params={
             "grant_type": "th_exchange_token", "client_secret": app["client_secret"],
@@ -340,10 +347,13 @@ def _profile(platform, acct):
                 "profile": {"id": first["id"], "name": first["name"], "avatar": first["avatar"],
                             "url": f"https://facebook.com/{first['id']}"}}
     if platform == "instagram":
-        me = _call("GET", f"{IG_GRAPH}/me", params={"fields": "user_id,username,profile_picture_url",
-                                                   "access_token": t})
-        return {"user_id": me.get("user_id") or me.get("id"),
-                "profile": {"id": me.get("user_id") or me.get("id"), "name": "@" + me.get("username", ""),
+        ids = _ig_accounts(t)
+        if not ids:
+            raise SocialError("no Instagram account was shared with the app - tick it in the login window")
+        me = _call("GET", f"{GRAPH}/{ids[0]}", params={"fields": "id,username,profile_picture_url",
+                                                      "access_token": t})
+        return {"user_id": me["id"],
+                "profile": {"id": me["id"], "name": "@" + me.get("username", ""),
                             "avatar": me.get("profile_picture_url"),
                             "url": f"https://instagram.com/{me.get('username', '')}"}}
     if platform == "threads":
@@ -365,6 +375,21 @@ def _profile(platform, acct):
     return {}
 
 
+def _ig_accounts(token):
+    """Instagram accounts this login may use: Facebook Login for Business lists them per permission."""
+    app = _apps()["instagram"]
+    info = _call("GET", f"{GRAPH}/debug_token", params={
+        "input_token": token, "access_token": f"{app['client_id']}|{app['client_secret']}"}).get("data") or {}
+    for scope in ("instagram_content_publish", "instagram_basic"):
+        for s in info.get("granular_scopes") or []:
+            if s.get("scope") == scope and s.get("target_ids"):
+                return s["target_ids"]
+    # an older login sees the account through the Facebook Page it is linked to
+    pages = _call("GET", f"{GRAPH}/me/accounts", params={"fields": "instagram_business_account",
+                                                         "access_token": token}).get("data") or []
+    return [x["instagram_business_account"]["id"] for x in pages if x.get("instagram_business_account")]
+
+
 def _token(platform):
     """A working login, refreshed when its token is about to expire."""
     p, acct = PLATFORMS[platform], _account(platform)
@@ -373,11 +398,9 @@ def _token(platform):
     if not acct.get("expires_at") or acct["expires_at"] - time.time() > 24 * 3600:
         return acct
     app = _apps().get(platform) or {}
-    if platform in ("instagram", "threads"):
-        url = ("https://graph.instagram.com/refresh_access_token" if platform == "instagram"
-               else "https://graph.threads.net/refresh_access_token")
-        tok = _call("GET", url, params={"grant_type": "ig_refresh_token" if platform == "instagram"
-                                        else "th_refresh_token", "access_token": acct["access_token"]})
+    if platform == "threads":
+        tok = _call("GET", "https://graph.threads.net/refresh_access_token", params={
+            "grant_type": "th_refresh_token", "access_token": acct["access_token"]})
     elif acct.get("refresh_token"):
         form = {p.get("client_param", "client_id"): app["client_id"], "client_secret": app["client_secret"],
                 "grant_type": "refresh_token", "refresh_token": acct["refresh_token"]}
@@ -557,22 +580,22 @@ def _post_instagram(acct, job_id, video, result, mode):
         params["cover_url"] = _public_video_url(job_id, "cover.jpg")
     if public:
         params["video_url"] = public
-        container = _call("POST", f"{IG_GRAPH}/{uid}/media", params=params)
+        container = _call("POST", f"{GRAPH}/{uid}/media", params=params)
     else:  # no public link: hand the file over directly (resumable upload)
-        container = _call("POST", f"{IG_GRAPH}/{uid}/media", params={**params, "upload_type": "resumable"})
+        container = _call("POST", f"{GRAPH}/{uid}/media", params={**params, "upload_type": "resumable"})
         _call("POST", container["uri"], body=video, timeout=900, headers={
             "Authorization": f"OAuth {t}", "offset": "0", "file_size": str(len(video))})
     cid = container["id"]
 
     def ready():
-        s = _call("GET", f"{IG_GRAPH}/{cid}", params={"fields": "status_code,status", "access_token": t})
+        s = _call("GET", f"{GRAPH}/{cid}", params={"fields": "status_code,status", "access_token": t})
         if s.get("status_code") == "FINISHED":
             return True
         return (s.get("status") or "rejected") if s.get("status_code") in ("ERROR", "EXPIRED") else None
 
     _wait(ready, "Instagram processing")
-    media = _call("POST", f"{IG_GRAPH}/{uid}/media_publish", params={"creation_id": cid, "access_token": t})
-    link = _call("GET", f"{IG_GRAPH}/{media['id']}", params={"fields": "permalink", "access_token": t})
+    media = _call("POST", f"{GRAPH}/{uid}/media_publish", params={"creation_id": cid, "access_token": t})
+    link = _call("GET", f"{GRAPH}/{media['id']}", params={"fields": "permalink", "access_token": t})
     return {"url": link.get("permalink"), "id": media["id"]}
 
 
