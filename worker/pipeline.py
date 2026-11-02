@@ -348,6 +348,7 @@ class Job:
     def finish(self):
         self.status["state"] = "done"
         self.status["stage"] = None
+        self.status.pop("error", None)  # an earlier failed attempt (re-render, restart) no longer applies
         self.save()
 
 
