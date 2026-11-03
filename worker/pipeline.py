@@ -28,6 +28,8 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
+# the test copy of the Studio (compose service 'sandbox'): never posts, never messages, runs no background jobs
+SANDBOX = os.environ.get("SANDBOX") == "1"
 DATA = space.ROOT                         # shared: music, sfx, previews, platform app keys
 JOBS = space.Here("jobs")                 # the rest belongs to the current channel
 SKILLS = Path(os.environ.get("SKILLS_MOUNT", "/skills"))

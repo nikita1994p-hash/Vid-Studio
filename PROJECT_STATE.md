@@ -189,3 +189,10 @@ worker/plans.py: none (new accounts: menu + plans page only) / trial 3 days / st
 
 ## Public address (Tailscale Funnel)
 docker compose --profile public up -d starts the tailscale container (needs TS_AUTHKEY in .env); it publishes only the worker at https://vidstudio.<tailnet>.ts.net (tailscale/serve.json). Requests through it never reach /produce, /social/, /jobs/, /n8n/ (PUBLIC_PROXY_HOST=tailscale). Instagram / Threads fetch files through signed 24 h links (auth.sign_file, key in data/secret.key). After it runs: set PUBLIC_BASE_URL to the ts.net address.
+
+## Sandbox — test before the real Studio (added 03.11.2026)
+Rule: never rebuild or restart the real worker without the user's OK (a rebuild cut off an Instagram post on 02.11). Test changes in the sandbox first.
+- `python sandbox_sync.py [--jobs N]` wipes and refills data-sandbox/ from data/: users, music, sfx, previews, each channel's settings/rules/topics/history and its N newest videos. Never accounts/ (logins, Telegram bot), app keys, sessions or secret.key.
+- `docker compose --profile sandbox up -d --build --no-deps sandbox` -> http://localhost:8001 (same login). Own network `sandbox`: cannot reach n8n or the real worker; no tunnel.
+- SANDBOX=1 (pipeline.SANDBOX): social.post and /api/jobs/{id}/publish refuse, Telegram only logs, no stats / Telegram-poll / FLUX-redo loops; an amber "Sandbox · nothing is posted" badge shows in the UI.
+- It does call Gemini / Cloudflare / Edge with the real .env keys, so making a video there spends the same free quotas.

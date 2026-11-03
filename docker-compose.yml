@@ -32,6 +32,27 @@ services:
       - ${SKILLS_DIR}:/skills:ro
       - ${YOUTUBE_PROFILE_DIR}:/youtube:ro
 
+  # the test copy of the Studio: try changes here before they reach the real one.
+  # Its own data (python sandbox_sync.py copies settings and a few videos, never logins or the bot),
+  # its own network (cannot reach n8n or the real worker), no tunnel; posting and Telegram are off.
+  # Starts only with:  docker compose --profile sandbox up -d --build sandbox   ->  http://localhost:8001
+  sandbox:
+    build: ./worker
+    profiles: ["sandbox"]
+    env_file: .env
+    ports:
+      - "127.0.0.1:8001:8000"
+    environment:
+      - SANDBOX=1
+      - PUBLIC_BASE_URL=http://localhost:8001
+      - N8N_PUBLISH_WEBHOOK=http://127.0.0.1:9/sandbox-has-no-n8n
+    volumes:
+      - ./data-sandbox:/data
+      - ${SKILLS_DIR}:/skills:ro
+      - ${YOUTUBE_PROFILE_DIR}:/youtube:ro
+    networks:
+      - sandbox
+
   # the public https address (Tailscale Funnel): only the Studio is published, never n8n.
   # Starts only with:  docker compose --profile public up -d   (needs TS_AUTHKEY in .env)
   tailscale:
@@ -53,3 +74,6 @@ services:
 volumes:
   n8n_data:
   tailscale_state:
+
+networks:
+  sandbox:   # the test Studio alone: internet yes, n8n and the real worker no

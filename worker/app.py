@@ -89,9 +89,10 @@ def _redo_loop(pause=1200, give_up=48):
             _busy.release()
 
 
-threading.Thread(target=_stats_loop, daemon=True).start()
-threading.Thread(target=notify.poll_loop, daemon=True).start()   # Telegram button presses
-threading.Thread(target=_redo_loop, daemon=True).start()         # FLUX pictures for card-only videos
+if not pipeline.SANDBOX:   # the test copy must not answer the real bot's buttons or spend the picture quota
+    threading.Thread(target=_stats_loop, daemon=True).start()
+    threading.Thread(target=notify.poll_loop, daemon=True).start()   # Telegram button presses
+    threading.Thread(target=_redo_loop, daemon=True).start()         # FLUX pictures for card-only videos
 STATIC = Path(__file__).parent / "static"
 MEDIA = {".mp4": "video/mp4", ".png": "image/png", ".jpg": "image/jpeg", ".wav": "audio/wav",
          ".mp3": "audio/mpeg", ".json": "application/json", ".ass": "text/plain", ".txt": "text/plain"}
@@ -451,6 +452,7 @@ def me(request: Request):
     except space.SpaceError:
         current = None
     return {"user": auth.public(user), "channels": auth.channels_of(user), "channel": current,
+            "sandbox": pipeline.SANDBOX,
             "templates": {k: v["label"] for k, v in niches.TEMPLATES.items()},
             "unsubscribe_reasons": auth.UNSUBSCRIBE_REASONS, "plans": list(plans.GRANTABLE),
             "plan_names": {k: v["label"] for k, v in plans.PLANS.items()}, "access": access(user)}
@@ -960,6 +962,8 @@ def tiktok_form(job_id: str):
 def publish(job_id: str, req: PublishRequest):
     """Post the video to the chosen platforms: normally through n8n (which keeps a log of every
     run), or straight from the worker with direct=true."""
+    if pipeline.SANDBOX:
+        raise HTTPException(403, "sandbox: publishing is off - publish from the real Studio")
     if req.mode not in ("private", "schedule", "public"):
         raise HTTPException(400, "mode must be private, schedule or public")
     platforms = [p for p in dict.fromkeys(req.platforms) if p in social.PLATFORMS]

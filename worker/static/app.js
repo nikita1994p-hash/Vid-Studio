@@ -1231,6 +1231,10 @@ async function loadMe() {
   $("#create-btn").closest(".create-wrap").hidden = !hasAccess();
   $("#mode-pill").hidden = !isAdmin(me.user);                       // live/test mode and n8n are the admin's business
   document.querySelector(".sidebar-foot").hidden = !isFullAdmin(me.user);
+  if (me.sandbox && !$(".sandbox-badge")) {   // never mistake the test copy for the real Studio
+    document.body.insertAdjacentHTML("beforeend", `<div class="sandbox-badge" role="status">Sandbox · nothing is posted</div>`);
+    document.title = `Sandbox · ${document.title}`;
+  }
 }
 
 $("#channel-pick").addEventListener("change", async (e) => {

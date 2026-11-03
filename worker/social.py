@@ -813,6 +813,8 @@ def mark_queued(job_id, platforms, mode):
 def post(platform, job_id, mode="auto", opts=None):
     """Upload one finished video to one platform; the result lands in the video's status.
     opts: the TikTok form's choices (tiktok_options), when the creator posts from the Studio."""
+    if pipeline.SANDBOX:
+        raise SocialError("sandbox: posting is off - publish from the real Studio")
     p = _check(platform)
     data = pipeline.load_job(job_id)
     if data["status"]["state"] != "done" or not data["result"]:

@@ -91,6 +91,9 @@ def _keyboard(buttons):
 
 
 def _send_now(text, buttons=None):
+    if pipeline.SANDBOX:
+        print(f"[sandbox] telegram not sent: {text[:200]}", flush=True)
+        return
     c = _config()
     params = {"chat_id": c["chat_id"], "text": text[:4000], "disable_web_page_preview": "true"}
     if buttons:

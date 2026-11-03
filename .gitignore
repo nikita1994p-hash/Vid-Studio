@@ -7,3 +7,5 @@ __pycache__/
 *.pyc
 ~$*
 backup/
+# the test Studio's data - a copy made by sandbox_sync.py
+data-sandbox/
