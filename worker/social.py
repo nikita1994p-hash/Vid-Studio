@@ -377,8 +377,16 @@ def _profile(platform, acct):
                             "avatar": sn.get("thumbnails", {}).get("default", {}).get("url"),
                             "url": f"https://youtube.com/channel/{items[0]['id']}"}}
     if platform == "facebook":
-        pages = _call("GET", f"{GRAPH}/me/accounts", params={
-            "fields": "id,name,access_token,picture{url}", "access_token": t}).get("data") or []
+        fields = "id,name,access_token,picture{url}"
+        pages = _call("GET", f"{GRAPH}/me/accounts", params={"fields": fields, "access_token": t}).get("data") or []
+        if not pages:
+            # a Page in a business portfolio is missing from me/accounts: ask for the Pages this login was granted
+            scopes = (_call("GET", f"{GRAPH}/debug_token", params={"input_token": t, "access_token": t})
+                      .get("data") or {}).get("granular_scopes") or []
+            ids = dict.fromkeys(i for s in scopes if s.get("scope") in ("pages_show_list", "pages_manage_posts")
+                                for i in s.get("target_ids") or [])
+            pages = [p for p in (_call("GET", f"{GRAPH}/{i}", params={"fields": fields, "access_token": t}) for i in ids)
+                     if p.get("access_token")]
         if not pages:
             raise SocialError("this Facebook account manages no Page - create a Page first")
         pages = [{"id": x["id"], "name": x["name"], "access_token": x["access_token"],
