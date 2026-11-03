@@ -67,11 +67,12 @@ PLATFORMS = {
     "facebook": {
         "name": "Facebook Page", "dev_url": "https://developers.facebook.com/apps",
         "auth_url": "https://www.facebook.com/v21.0/dialog/oauth",
-        "token_url": f"{GRAPH}/oauth/access_token",
-        "scopes": ["pages_show_list", "pages_read_engagement", "pages_manage_posts", "publish_video"],
-        "scope_sep": ",", "token_method": "GET",
-        "how": "Meta for Developers: app with 'Facebook Login for Business', add the redirect URI below. "
-               "Posts go to a Facebook Page you manage (Reels).",
+        "token_url": f"{GRAPH}/oauth/access_token", "token_method": "GET",
+        # a Business app takes no scope list: the configuration holds pages_show_list, pages_read_engagement, pages_manage_posts
+        "scopes": [], "config": True, "auth_extra": {"override_default_response_type": "true"},
+        "how": "Meta for Developers: the 'Manage Pages' use case, add the redirect URI below in Facebook Login for Business "
+               "-> Settings, then create a configuration (User access token; Pages; pages_show_list, pages_read_engagement, "
+               "pages_manage_posts) and paste the App ID, App secret and Configuration ID. Posts go to the Page as Reels.",
     },
     "threads": {
         "name": "Threads", "dev_url": "https://developers.facebook.com/apps",
@@ -140,7 +141,7 @@ def accounts(base=None):
             "id": key, "name": p["name"], "how": p["how"], "dev_url": p["dev_url"],
             "redirect_uri": redirect_uri(key, base),
             "app_configured": _app_ready(p, app),
-            "client_id": app.get("client_id", ""),
+            "client_id": app.get("client_id", ""), "has_secret": bool(app.get("client_secret")),
             "needs_config": p.get("config", False), "config_id": app.get("config_id", ""),
             "account_id": app.get("account_id", ""),
             "connected": bool(acct.get("access_token")),
