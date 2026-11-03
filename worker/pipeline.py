@@ -409,6 +409,15 @@ def recover_interrupted():
         if status and status.get("state") in ("queued", "running"):
             Job(d.name).fail("interrupted: the worker restarted while this video was being made. "
                              "Delete it and create a new one.")
+        # a post cut off by the restart (or that n8n could not reach us for) would say 'queued' forever
+        status = _read_json(d / "status.json")
+        stuck ={p: s for p, s in ((status or {}).get("social") or {}).items()
+                 if s.get("state") in ("queued", "uploading")}
+        if stuck:
+            for s in stuck.values():
+                s.update(state="error", error="interrupted: the Studio restarted before this post finished - "
+                                              "publish it again")
+            _write_json(d / "status.json", status)
 
 
 def delete_job(job_id):
