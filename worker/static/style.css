@@ -465,3 +465,8 @@ label.inline input { width: 84px !important; margin-top: 0 !important; }
 .sandbox-badge { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1000;
   padding: 6px 14px; border-radius: 999px; background: var(--amber); color: #000;
   font-size: 13px; font-weight: 600; pointer-events: none; }
+/* hook and title picker of a video that waits after its script */
+.hook.pick { cursor: pointer; }
+.hook.pick input[type=radio] { accent-color: var(--green); margin: 0; flex: none; }
+.hook.pick:has(input:checked) { box-shadow: 0 0 0 1px #30d15866 inset; background: #30d15814; }
+.chip.waiting::before { background: var(--amber); }

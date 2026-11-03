@@ -36,7 +36,8 @@ import topics
 
 app = FastAPI(title="Vid Studio worker")
 _busy = threading.Lock()
-COOKIE = "vs_session"
+# cookies ignore the port: the sandbox on localhost:8001 must not overwrite the real Studio's login
+COOKIE = "vs_sandbox" if pipeline.SANDBOX else "vs_session"
 space.migrate()
 for _cid in space.list_ids():
     with space.use(_cid):
@@ -105,6 +106,12 @@ class ProduceRequest(BaseModel):
     options: dict | None = None         # settings for this video only (keys of the Settings page)
     script: str | None = None           # your own narration: line 1 = hook, then one line per scene
     variants: int = 1                   # 1-5 versions (A/B test): different hook, title, voice, music, pictures
+    choose: bool = False                # stop after the script: the creator picks the hook and title
+
+
+class ChooseRequest(BaseModel):
+    hook: str
+    title: str
 
 
 class PublishRequest(BaseModel):
@@ -819,25 +826,57 @@ def start_job(request: Request, req: ProduceRequest | None = None):
     job_id = pipeline.new_job_id()
     pipeline.Job(job_id, mock=pipeline.flag("MOCK") if req.mock is None else req.mock, topic=req.topic)
 
-    extra = max(0, min(4, (req.variants or 1) - 1))
+    after = {"variants": max(0, min(4, (req.variants or 1) - 1)), "use_video_hook": req.use_video_hook,
+             "options": req.options, "choose": req.choose}
+    user = _user(request)
 
     def run():
         try:
             result = pipeline.produce(topic=(req.topic or "").strip() or None, mock=req.mock,
                                       use_video_hook=req.use_video_hook, job_id=job_id,
-                                      options=req.options, script=req.script)
-            if extra:
-                pipeline.make_variants(result["job_id"], extra)
-            # a story split into parts: make the remaining parts right away, one video each
-            while result.get("next_part") and not _over_limit(_user(request)):
-                nxt = pipeline.new_job_id()
-                pipeline.Job(nxt, topic="next part")
-                result = pipeline.produce(mock=False, use_video_hook=req.use_video_hook, job_id=nxt,
-                                          options=req.options)
-                if extra:
-                    pipeline.make_variants(result["job_id"], extra)
+                                      options=req.options, script=req.script, choose=req.choose, after=after)
+            _follow_up(result, after, user)
         except Exception:
             traceback.print_exc()  # already recorded in status.json by produce()
+        finally:
+            _busy.release()
+
+    space.thread(run)
+    return {"job_id": job_id}
+
+
+def _follow_up(result, after, user):
+    """Once a video is made: its A/B versions, then a split story's remaining parts, one video each.
+    A video waiting for its hook does this later, after the pick."""
+    while not result.get("waiting"):
+        if after.get("variants"):
+            pipeline.make_variants(result["job_id"], after["variants"])
+        if not result.get("next_part") or _over_limit(user):
+            return
+        nxt = pipeline.new_job_id()
+        pipeline.Job(nxt, topic="next part")
+        result = pipeline.produce(mock=False, use_video_hook=after.get("use_video_hook"), job_id=nxt,
+                                  options=after.get("options"), choose=after.get("choose"), after=after)
+
+
+@app.post("/api/jobs/{job_id}/choose")
+def choose_hook(job_id: str, req: ChooseRequest, request: Request):
+    """The creator's hook and title for a video that waits after its script; the rest is made now."""
+    try:
+        pick = pipeline.check_choice(job_id, req.hook, req.title)[3]
+    except pipeline.PipelineError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        _fail(e)
+    if not _busy.acquire(blocking=False):
+        raise HTTPException(409, "another video is being produced right now - try again when it is done")
+    user = _user(request)
+
+    def run():
+        try:
+            _follow_up(pipeline.choose_and_build(job_id, req.hook, req.title), pick.get("after") or {}, user)
+        except Exception:
+            traceback.print_exc()  # recorded in status.json
         finally:
             _busy.release()
 

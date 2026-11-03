@@ -53,7 +53,7 @@ const fmtSec = (s) => (s ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).p
 const money = (v) => (v == null ? "—" : `$${Number(v).toFixed(2)}`);
 
 function stateChip(job) {
-  const label = { queued: "Queued", running: "Working", done: "Ready", error: "Failed" }[job.state] || job.state;
+  const label = { queued: "Queued", running: "Working", waiting: "Pick a hook", done: "Ready", error: "Failed" }[job.state] || job.state;
   const stage = job.state === "running" && job.stage ? ` · ${STAGES.find((s) => s[0] === job.stage)?.[1] || ""}` : "";
   return `<span class="chip ${esc(job.state)}">${esc(label + stage)}</span>`;
 }
@@ -171,11 +171,11 @@ async function renderContent() {
 
 async function renderVideo(id) {
   const data = await api(`/api/jobs/${encodeURIComponent(id)}`);
-  const { status, result, plan, scores, files, scenes: sceneData, factcheck, promptcheck, hookcheck, cover } = data;
+  const { status, result, plan, scores, files, scenes: sceneData, factcheck, promptcheck, hookcheck, cover, pick } = data;
   const busy = status.state === "running" || status.state === "queued";
   const ready = status.state === "done" && files.includes("final.mp4");
   const base = `/files/${encodeURIComponent(id)}`;
-  const editing = document.activeElement && document.activeElement.closest && document.activeElement.closest("#meta-form, #cover-form");
+  const editing = document.activeElement && document.activeElement.closest && document.activeElement.closest("#meta-form, #cover-form, #pick-form");
   if (editing) return poll(route, 3000); // do not wipe what the user is typing
 
   const accounts = ready ? await api("/api/accounts").catch(() => []) : [];
@@ -201,6 +201,7 @@ async function renderVideo(id) {
         <section class="card">${stepper(status.stages)}
           ${status.error ? `<div class="error-box">${esc(status.error)}</div>` : ""}
         </section>
+        ${status.state === "waiting" && plan ? pickCard(plan, scores, pick) : ""}
         ${factCard(factcheck)}
         ${promptCard(promptcheck)}
         ${ready && status.kind !== "uploaded" ? coverCard(base, cover, sceneData, files) : ""}
@@ -220,6 +221,22 @@ async function renderVideo(id) {
       oldPlayer.getAttribute("src") === freshPlayer.getAttribute("src")) {
     freshPlayer.replaceWith(oldPlayer);
   }
+
+  const pickForm = $("#pick-form");
+  pickForm?.querySelectorAll("input[name=title_pick]").forEach((r) =>
+    r.addEventListener("change", () => { pickForm.title.value = r.value; }));
+  pickForm?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const hook = pickForm.querySelector("input[name=hook]:checked")?.value;
+    if (!hook) return toast("Pick a hook", true);
+    try {
+      await api(`/api/jobs/${encodeURIComponent(id)}/choose`, { method: "POST",
+        body: JSON.stringify({ hook, title: pickForm.title.value.trim() }) });
+      toast("Making the video for your hook — follow it live");
+      pickForm.querySelector("button").disabled = true;
+      setTimeout(() => renderVideo(id), 800);
+    } catch (e) { toast(e.message, true); }
+  });
 
   $("#delete-btn")?.addEventListener("click", async () => {
     if (!confirm("Delete this video and all its files from this computer? (YouTube is not touched.)")) return;
@@ -503,6 +520,29 @@ function hookRounds(hc) {
     in ${hc.rounds.length - 1} round(s)${hc.best < hc.target ? " (target not reached — the best that passed the review is used)" : ""}.
     ${rejected.length ? `<details><summary>${rejected.length} rewrite(s) rejected by the review</summary>
       ${rejected.map((x) => `<div class="issue">“${esc(x.hook)}” — ${esc(x.reason)}</div>`).join("")}</details>` : ""}</div>`;
+}
+
+// a video that waits after its script: every hook (each has its own closing line) and title, best first
+function pickCard(plan, scores, pick) {
+  const norm = (t) => (t || "").replace(/\s+/g, " ").trim();
+  const hookScores = Object.fromEntries((scores?.hooks || []).map((h) => [norm(h.hook), h]));
+  const hooks = plan.hooks.map((h) => ({ h, s: hookScores[norm(h.text)] }))
+    .sort((a, b) => (b.s?.verdict ?? -1) - (a.s?.verdict ?? -1));
+  const titles = scores?.titles?.length ? [...scores.titles].sort((a, b) => b.score - a.score) : plan.titles.map((t) => ({ title: t }));
+  return `<section class="card"><h2>Pick the hook and title</h2>
+    <p class="muted">The script is written and checked. The voice-over, pictures and subtitles are made for the hook you pick — each hook has its own closing line.</p>
+    <form id="pick-form">
+      <h3>Hook</h3>
+      ${hooks.map(({ h, s }) => `<label class="hook pick"><input type="radio" name="hook" value="${esc(h.text)}" ${norm(h.text) === norm(pick?.hook) ? "checked" : ""}>
+        <div class="score" title="hookscore.py verdict">${s ? s.verdict : "—"}</div>
+        <div><div>${esc(h.text)}</div><div class="muted">${esc(h.formula_id)}${s ? " · " + esc(s.band) : ""}</div></div></label>`).join("")}
+      <h3 style="margin-top:20px">Title</h3>
+      ${titles.map((t) => `<label class="hook pick"><input type="radio" name="title_pick" value="${esc(t.title)}" ${t.title === pick?.title ? "checked" : ""}>
+        <div class="score" title="title.py score">${t.score ?? "—"}</div><div>${esc(t.title)}</div></label>`).join("")}
+      <label>Title as published${pick?.prefix ? ` <span class="muted">(“${esc(pick.prefix)}” is added if it is missing)</span>` : ""}
+        <input name="title" value="${esc(pick?.title || "")}" maxlength="100" required></label>
+      <button class="btn btn-primary">Make the video</button>
+    </form></section>`;
 }
 
 function tabBody(tab, { id, result, plan, scores, files, base, sceneData, busy, version, hookcheck }) {
@@ -1650,6 +1690,7 @@ async function openNew() {
   $("#quota-hint").hidden = !quotaLine(me?.access);
   f.mock.checked = !!health?.mock;
   f.video.checked = !!health?.use_video_hook;
+  try { f.choose.checked = localStorage.getItem("vs-choose") === "1"; } catch { /* only a convenience */ }
   try {
     const { fields } = await api("/api/settings");
     newFields = fields.filter((x) => NEW_OPTION_KEYS.includes(x.key));
@@ -1668,8 +1709,10 @@ $("#new-dialog").addEventListener("close", async () => {
   try {
     const r = await api("/api/jobs", { method: "POST", body: JSON.stringify({
       topic: f.topic.value.trim() || null, mock: f.mock.checked, use_video_hook: f.video.checked,
-      options, script: script || null, variants: Number(f.variants.value) }) });
-    toast(Number(f.variants.value) > 1 ? `Started — ${f.variants.value} versions, one after another` : "Started — follow the pipeline live");
+      options, script: script || null, variants: Number(f.variants.value), choose: f.choose.checked }) });
+    try { localStorage.setItem("vs-choose", f.choose.checked ? "1" : ""); } catch { /* only a convenience */ }
+    toast(f.choose.checked ? "Started — pick the hook and title when the script is ready"
+      : Number(f.variants.value) > 1 ? `Started — ${f.variants.value} versions, one after another` : "Started — follow the pipeline live");
     currentTab = "script";
     location.hash = `#/video/${r.job_id}`;
   } catch (e) { toast(e.message, true); }

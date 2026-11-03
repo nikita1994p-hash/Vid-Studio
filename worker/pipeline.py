@@ -348,6 +348,12 @@ class Job:
         self.status["error"] = message
         self.save()
 
+    def wait(self):
+        """The script is ready and the creator picks the hook and title (choose_and_build carries on)."""
+        self.status["state"] = "waiting"
+        self.status["stage"] = None
+        self.save()
+
     def finish(self):
         self.status["state"] = "done"
         self.status["stage"] = None
@@ -370,6 +376,7 @@ def load_job(job_id):
         "promptcheck": _read_json(d / "promptcheck.json"),
         "hookcheck": _read_json(d / "hookcheck.json"),
         "cover": _read_json(d / "cover.json"),
+        "pick": {k: v for k, v in (_read_json(d / "pick.json") or {}).items() if k in ("hook", "title", "prefix")},
         "files": sorted(p.name for p in d.iterdir() if p.is_file()),
     }
 
@@ -1940,9 +1947,13 @@ def mark_youtube_queued(job_id, mode):
 
 # ---------------------------------------------------------------------- produce
 
-def produce(topic=None, mock=None, use_video_hook=None, job_id=None, options=None, script=None):
+def produce(topic=None, mock=None, use_video_hook=None, job_id=None, options=None, script=None,
+            choose=False, after=None):
     """One video. options: settings for this video only (the New video dialog), on top of the
-    Studio settings; script: the creator's own narration - first line the hook, then one line per scene."""
+    Studio settings; script: the creator's own narration - first line the hook, then one line per scene.
+    choose: stop once the script is written so the creator picks the hook and title (returns
+    {job_id, waiting: True}; choose_and_build makes the video); after: what the caller does once the
+    video is made (A/B versions...), kept until then."""
     mock = flag("MOCK") if mock is None else mock
     use_video = flag("USE_VIDEO_HOOK") if use_video_hook is None else use_video_hook
     options = clean_options(options)
@@ -1965,7 +1976,7 @@ def produce(topic=None, mock=None, use_video_hook=None, job_id=None, options=Non
             job.status["queue_id"] = queued["id"]
         job.save()
         try:
-            result = _produce(job, topic, mock, use_video, lines)
+            result = _produce(job, topic, mock, use_video, lines, choose, after)
         except Exception as e:
             job.fail(str(e))
             import notify
@@ -2035,7 +2046,7 @@ def _labels(episode, k, total):
     return label, prefix
 
 
-def _produce(job, topic, mock, use_video, lines):
+def _produce(job, topic, mock, use_video, lines, choose=False, after=None):
     d = job.dir
     history = _history()
     client = None if mock else _client()
@@ -2086,7 +2097,62 @@ def _produce(job, topic, mock, use_video, lines):
     ctx = {"plan": plan, "client": client, "mock": mock, "use_video": use_video, "episode": episode,
            "k": k, "total": total, "part": part, "outline": outline, "label": label,
            "hook_score": hook_score, "title_score": title_score}
+    if choose and not mock and not lines:
+        # the plan after the fact and picture checks: the body fits every hook, so only the pick is left
+        (d / "plan.json").write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+        _write_json(d / "pick.json", {"hook": chosen.text, "title": title, "prefix": prefix, "after": after or {},
+                                      "ctx": {k_: v for k_, v in ctx.items() if k_ not in ("plan", "client")}})
+        job.wait()
+        import notify
+        notify.send("done", f"✍ Pick the hook and title: {job.status['topic']}\n{notify.link(job.id)}")
+        return {"job_id": job.id, "waiting": True}
     return _build(job, ctx, hook, chosen.loop_line, _series_title(title, prefix))
+
+
+def pick_data(job_id):
+    """What a waiting video keeps for choose_and_build, including the caller's 'after'."""
+    return _read_json(job_dir(job_id) / "pick.json")
+
+
+def check_choice(job_id, hook, title):
+    """The picked hook (one of the plan's) and title, or a PipelineError the creator can read."""
+    d = job_dir(job_id)
+    status, pick = _read_json(d / "status.json") or {}, pick_data(job_id)
+    if status.get("state") != "waiting" or not pick:
+        raise PipelineError("this video is not waiting for a hook - it is already made or being made")
+    plan = Plan.model_validate_json((d / "plan.json").read_text(encoding="utf-8"))
+    chosen = next((h for h in plan.hooks if " ".join(h.text.split()) == " ".join((hook or "").split())), None)
+    title = " ".join((title or "").split())[:100]
+    if not chosen:
+        raise PipelineError("pick one of this video's hooks")
+    if not title:
+        raise PipelineError("the title is empty")
+    return plan, chosen, title, pick
+
+
+def choose_and_build(job_id, hook, title):
+    """Make a waiting video with the hook and title the creator picked: voice, pictures, edit."""
+    d = job_dir(job_id)
+    plan, chosen, title, pick = check_choice(job_id, hook, title)
+    job = Job(job_id)
+    scores = _read_json(d / "scores.json") or {}
+    hook_score = next((h for h in scores.get("hooks") or []
+                       if " ".join(h.get("hook", "").split()) == " ".join(chosen.text.split())), None)
+    title_score = next((t for t in scores.get("titles") or [] if t.get("title", "").strip() == title), None)
+    token = _job_options.set(job.status.get("options") or {})
+    try:
+        job.status["state"] = "running"
+        job.save()
+        ctx = {**pick["ctx"], "plan": plan, "client": _client(),
+               "hook_score": hook_score, "title_score": title_score}
+        return _build(job, ctx, chosen.text, chosen.loop_line, _series_title(title, pick.get("prefix") or ""))
+    except Exception as e:
+        job.fail(str(e))
+        import notify
+        notify.send("error", f"❌ Video failed: {job.status.get('topic') or 'new video'}\n{str(e)[:400]}\n{notify.link(job.id)}")
+        raise
+    finally:
+        _job_options.reset(token)
 
 
 def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, music=None, image_dir=None):
