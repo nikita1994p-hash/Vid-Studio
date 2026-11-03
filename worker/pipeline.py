@@ -114,6 +114,7 @@ SETTINGS_SCHEMA = [
     {"key": "HOOK_MIN_SCORE", "group": "Content", "label": "Hook score to aim for (rewrite weaker hooks)", "type": "number", "min": 0, "max": 95, "default": "55"},
     {"key": "HOOK_SCORER", "group": "Content", "label": "Hook scorer", "type": "select", "options": ["shorts", "skill"], "default": "shorts"},
     {"key": "HOOK_ROUNDS", "group": "Content", "label": "Hook rewrite rounds (0 = off)", "type": "number", "min": 0, "max": 4, "default": "3"},
+    {"key": "PICK_HOOK", "group": "Content", "label": "Wait for me to pick the hook and title after the script (the daily video too; it is posted once made)", "type": "bool", "default": "false"},
     {"key": "LOOP_ENDING", "group": "Content", "label": "Loop ending (last frame = first frame)", "type": "bool", "default": "true"},
     {"key": "MAX_PARTS", "group": "Content", "label": "Split long stories into up to N parts", "type": "number", "min": 1, "max": 3, "default": "3"},
     {"key": "DESCRIPTION_FOOTER", "group": "Content", "label": "Description footer", "type": "text"},
@@ -366,6 +367,7 @@ def load_job(job_id):
     status = _read_json(d / "status.json")
     if status is None:
         raise PipelineError("no such video")
+    pick = _read_json(d / "pick.json") or {}
     return {
         "status": status,
         "result": _read_json(d / "result.json"),
@@ -376,7 +378,8 @@ def load_job(job_id):
         "promptcheck": _read_json(d / "promptcheck.json"),
         "hookcheck": _read_json(d / "hookcheck.json"),
         "cover": _read_json(d / "cover.json"),
-        "pick": {k: v for k, v in (_read_json(d / "pick.json") or {}).items() if k in ("hook", "title", "prefix")},
+        "pick": {**{k: v for k, v in pick.items() if k in ("hook", "title", "prefix")},
+                 "versions": (pick.get("after") or {}).get("variants") or 0},
         "files": sorted(p.name for p in d.iterdir() if p.is_file()),
     }
 
@@ -2130,6 +2133,21 @@ def check_choice(job_id, hook, title):
     return plan, chosen, title, pick
 
 
+def check_variant_picks(job_id, picks):
+    """The creator's hook and title for each A/B version, as [{hook, title}], or a PipelineError."""
+    plan = Plan.model_validate_json((job_dir(job_id) / "plan.json").read_text(encoding="utf-8"))
+    hooks = {" ".join(h.text.split()) for h in plan.hooks}
+    out = []
+    for i, p in enumerate((picks or [])[:4]):
+        hook, title = " ".join((p.get("hook") or "").split()), " ".join((p.get("title") or "").split())[:100]
+        if hook not in hooks:
+            raise PipelineError(f"version {i + 1}: pick one of this video's hooks")
+        if not title:
+            raise PipelineError(f"version {i + 1}: the title is empty")
+        out.append({"hook": hook, "title": title})
+    return out
+
+
 def choose_and_build(job_id, hook, title):
     """Make a waiting video with the hook and title the creator picked: voice, pictures, edit."""
     d = job_dir(job_id)
@@ -2354,20 +2372,22 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
 VARIANT_COLOURS = ["#00E5FF", "#7CFF4F", "#FF9E2C", "#FF5CA8", "#FFF200"]
 
 
-def make_variants(base_id, count, on_start=None):
+def make_variants(base_id, count, on_start=None, picks=None):
     """count more versions of a finished video for A/B testing: same topic and body, but another
     hook (next best by hookscore, with its own loop line), another title, voice, music, caption
     colour and - unless VARIANT_NEW_IMAGES is off - freshly generated pictures. These are real
-    differences a viewer notices, not a disguised copy of the same file."""
+    differences a viewer notices, not a disguised copy of the same file.
+    picks (from check_variant_picks) are the creator's hook and title for each version instead."""
     base = job_dir(base_id)
     plan = Plan.model_validate_json((base / "plan.json").read_text(encoding="utf-8"))
     result = _read_json(base / "result.json") or {}
     status = _read_json(base / "status.json") or {}
     scores = _read_json(base / "scores.json") or {}
     base_options = status.get("options") or {}
-    count = max(0, min(4, int(count)))
+    count = len(picks) if picks else max(0, min(4, int(count)))
 
     by_text = {h.text.replace("\n", " ").strip(): h for h in plan.hooks}
+    by_words = {" ".join(h.text.split()): h for h in plan.hooks}
     ranked = [by_text[r["hook"].strip()] for r in sorted(scores.get("hooks") or [], key=lambda r: -r["verdict"])
               if r.get("hook", "").strip() in by_text] or list(plan.hooks)
     others = [h for h in ranked if h.text.strip() != (result.get("hook") or "").strip()] or ranked
@@ -2390,7 +2410,8 @@ def make_variants(base_id, count, on_start=None):
     made = []
     for v in range(siblings + 1, siblings + count + 1):
         letter = "BCDEFGHIJKLMNOPQRSTUVWXYZ"[min(v - 1, 24)]
-        hook = others[(v - 1) % len(others)]
+        own = picks[v - siblings - 1] if picks else None
+        hook = by_words[own["hook"]] if own else others[(v - 1) % len(others)]
         opts = dict(base_options)
         if voices:
             opts["EDGE_VOICE"] = voices[(v - 1) % len(voices)]
@@ -2413,7 +2434,7 @@ def make_variants(base_id, count, on_start=None):
                    "k": k, "total": total, "part": None, "outline": [], "label": label,
                    "hook_score": None, "title_score": None}
             made.append(_build(job, ctx, hook.text.replace("\n", " ").strip(), hook.loop_line,
-                               _series_title(titles[v % len(titles)] if titles else plan.topic, prefix),
+                               _series_title(own["title"] if own else titles[v % len(titles)] if titles else plan.topic, prefix),
                                variant=letter, variant_of=base_id, music=music,
                                image_dir=None if flag("VARIANT_NEW_IMAGES", "true") else base))
         except Exception as e:

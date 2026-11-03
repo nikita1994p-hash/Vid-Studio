@@ -469,4 +469,6 @@ label.inline input { width: 84px !important; margin-top: 0 !important; }
 .hook.pick { cursor: pointer; }
 .hook.pick input[type=radio] { accent-color: var(--green); margin: 0; flex: none; }
 .hook.pick:has(input:checked) { box-shadow: 0 0 0 1px #30d15866 inset; background: #30d15814; }
+.version-pick { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+.version-pick select { width: 100%; }
 .chip.waiting::before { background: var(--amber); }

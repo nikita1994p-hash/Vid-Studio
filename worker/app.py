@@ -112,6 +112,7 @@ class ProduceRequest(BaseModel):
 class ChooseRequest(BaseModel):
     hook: str
     title: str
+    variants: list[dict] = []           # [{hook, title}] for the A/B versions B, C, ... (empty = the Studio picks)
 
 
 class PublishRequest(BaseModel):
@@ -148,6 +149,7 @@ class PageRequest(BaseModel):
 
 class VariantsRequest(BaseModel):
     count: int = 1
+    picks: list[dict] | None = None     # [{hook, title}] per new version (empty = next-best hook and title)
 
 
 class IncomeRequest(BaseModel):
@@ -850,7 +852,7 @@ def _follow_up(result, after, user):
     A video waiting for its hook does this later, after the pick."""
     while not result.get("waiting"):
         if after.get("variants"):
-            pipeline.make_variants(result["job_id"], after["variants"])
+            pipeline.make_variants(result["job_id"], after["variants"], picks=after.pop("picks", None))
         if not result.get("next_part") or _over_limit(user):
             return
         nxt = pipeline.new_job_id()
@@ -863,7 +865,10 @@ def _follow_up(result, after, user):
 def choose_hook(job_id: str, req: ChooseRequest, request: Request):
     """The creator's hook and title for a video that waits after its script; the rest is made now."""
     try:
-        pick = pipeline.check_choice(job_id, req.hook, req.title)[3]
+        after = dict(pipeline.check_choice(job_id, req.hook, req.title)[3].get("after") or {})
+        if req.variants:
+            after["picks"] = pipeline.check_variant_picks(job_id, req.variants)
+            after["variants"] = len(after["picks"])
     except pipeline.PipelineError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -874,7 +879,18 @@ def choose_hook(job_id: str, req: ChooseRequest, request: Request):
 
     def run():
         try:
-            _follow_up(pipeline.choose_and_build(job_id, req.hook, req.title), pick.get("after") or {}, user)
+            result = pipeline.choose_and_build(job_id, req.hook, req.title)
+            if after.get("publish"):  # the daily video: posted where n8n would have posted it
+                try:
+                    _send_to_n8n(job_id, after["publish"]["mode"], after["publish"]["platforms"])
+                except Exception as e:
+                    traceback.print_exc()
+                    notify.send("error", f"❌ The picked daily video was made but not sent to n8n: "
+                                         f"{getattr(e, 'detail', e)}\n{notify.link(job_id)}")
+            if not after.get("daily"):
+                _follow_up(result, after, user)
+            elif after.get("variants"):  # a split story's next part is tomorrow's daily video, as without the pick
+                pipeline.make_variants(job_id, after["variants"], picks=after.get("picks"))
         except Exception:
             traceback.print_exc()  # recorded in status.json
         finally:
@@ -944,7 +960,7 @@ def rerender(job_id: str):
 def variants(job_id: str, req: VariantsRequest, request: Request):
     """More versions of a finished video, made in the background."""
     try:
-        return {"making": start_variants(job_id, req.count, _user(request))}
+        return {"making": start_variants(job_id, req.count, _user(request), req.picks)}
     except BusyError as e:
         raise HTTPException(409, str(e))
     except LimitError as e:
@@ -965,17 +981,20 @@ def _over_limit(actor=None):
         return True
 
 
-def start_variants(job_id, count, actor=None):
-    """Shared by the Studio button and the Telegram bot (notify.on_variants; actor None = the channel owner's limit)."""
+def start_variants(job_id, count, actor=None, picks=None):
+    """Shared by the Studio button and the Telegram bot (notify.on_variants; actor None = the channel owner's limit).
+    picks: the creator's [{hook, title}] for each new version."""
     if pipeline.load_job(job_id)["status"]["state"] != "done":
         raise pipeline.PipelineError("the video is not finished yet")
+    picks = pipeline.check_variant_picks(job_id, picks) if picks else None
+    count = len(picks) if picks else count
     check_limit(max(0, min(4, count)), actor)
     if not _busy.acquire(blocking=False):
         raise BusyError("another video is being produced right now - try again later")
 
     def run():
         try:
-            pipeline.make_variants(job_id, count)
+            pipeline.make_variants(job_id, count, picks=picks)
         except Exception:
             traceback.print_exc()
         finally:
@@ -1039,8 +1058,19 @@ def publish(job_id: str, req: PublishRequest):
         social.mark_queued(job_id, platforms, req.mode)
         space.thread(run)
         return {"queued": job_id, "platforms": platforms, "via": "worker"}
+    _send_to_n8n(job_id, req.mode, platforms)
+    return {"queued": job_id, "platforms": platforms, "via": "n8n"}
+
+
+def _send_to_n8n(job_id, mode, platforms):
+    """Hand a finished video to n8n's publish workflow (the Studio button and a picked daily video)."""
+    if pipeline.SANDBOX:
+        print(f"[sandbox] would send {job_id} to n8n: {mode} on {', '.join(platforms) or 'nothing'}", flush=True)
+        return
+    if not platforms:
+        return
     url = pipeline.env("N8N_PUBLISH_WEBHOOK", "http://n8n:5678/webhook/vidauto-publish")
-    body = json.dumps({"job_id": job_id, "mode": req.mode, "platforms": platforms}).encode()
+    body = json.dumps({"job_id": job_id, "mode": mode, "platforms": platforms}).encode()
     request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(request, timeout=15).read()
@@ -1051,8 +1081,7 @@ def publish(job_id: str, req: PublishRequest):
         raise HTTPException(502, f"n8n answered {e.code}")
     except urllib.error.URLError as e:
         raise HTTPException(502, f"cannot reach n8n: {e.reason}")
-    social.mark_queued(job_id, platforms, req.mode)
-    return {"queued": job_id, "platforms": platforms, "via": "n8n"}
+    social.mark_queued(job_id, platforms, mode)
 
 
 # ------------------------------------------------------------------ settings
@@ -1332,7 +1361,7 @@ def produce(req: ProduceRequest | None = None):
     # the daily run waits for a re-render or picture redo that is still going instead of skipping the day
     if not _busy.acquire(timeout=900):
         raise HTTPException(409, "another video is being produced right now")
-    videos, errors = [], []
+    videos, waiting, errors = [], [], []
     try:
         for meta in space.all_channels():
             if not meta.get("daily", True):
@@ -1340,8 +1369,15 @@ def produce(req: ProduceRequest | None = None):
             try:
                 with space.use(meta["id"]):
                     check_limit(1)    # the channel owner's plan
+                    # PICK_HOOK: the video waits after its script; the Studio posts it once the creator picked
+                    choose = pipeline.flag("PICK_HOOK") and not req.mock
+                    after = {"daily": True, "publish": {"mode": "auto", "platforms": social.default_platforms()}}
                     result = pipeline.produce(topic=(req.topic or "").strip() or None,
-                                              mock=req.mock, use_video_hook=req.use_video_hook)
+                                              mock=req.mock, use_video_hook=req.use_video_hook,
+                                              choose=choose, after=after if choose else None)
+                    if result.get("waiting"):
+                        waiting.append({"job_id": result["job_id"], "channel": meta["id"]})
+                        continue
                     videos.append({"job_id": result["job_id"], "channel": meta["id"],
                                    "platforms": social.default_platforms()})
             except Exception as e:  # one channel's failure must not cost the others their video
@@ -1349,9 +1385,9 @@ def produce(req: ProduceRequest | None = None):
                 errors.append(f"{meta['name']}: {str(e)[:200]}")
     finally:
         _busy.release()
-    if not videos and errors:
+    if not videos and not waiting and errors:
         raise HTTPException(500, " | ".join(errors))
-    return {"videos": videos, "errors": errors, "job_id": videos[0]["job_id"] if videos else None}
+    return {"videos": videos, "waiting": waiting, "errors": errors, "job_id": videos[0]["job_id"] if videos else None}
 
 
 @app.post("/social/{platform}/post")

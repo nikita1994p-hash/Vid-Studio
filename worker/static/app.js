@@ -175,7 +175,7 @@ async function renderVideo(id) {
   const busy = status.state === "running" || status.state === "queued";
   const ready = status.state === "done" && files.includes("final.mp4");
   const base = `/files/${encodeURIComponent(id)}`;
-  const editing = document.activeElement && document.activeElement.closest && document.activeElement.closest("#meta-form, #cover-form, #pick-form");
+  const editing = document.activeElement && document.activeElement.closest && document.activeElement.closest("#meta-form, #cover-form, #pick-form, #variants-form");
   if (editing) return poll(route, 3000); // do not wipe what the user is typing
 
   const accounts = ready ? await api("/api/accounts").catch(() => []) : [];
@@ -206,7 +206,7 @@ async function renderVideo(id) {
         ${promptCard(promptcheck)}
         ${ready && status.kind !== "uploaded" ? coverCard(base, cover, sceneData, files) : ""}
         ${ready ? publishCard(status, accounts) : ""}
-        ${ready && status.kind !== "uploaded" ? variantsCard(result) : ""}
+        ${ready && status.kind !== "uploaded" ? variantsCard(result, plan) : ""}
         <div class="tabs">
           ${["details", "script", "files"].map((t) => `<button class="tab ${currentTab === t ? "active" : ""}" data-tab="${t}">${
             { details: "Details", script: "Script & hooks", files: "Files" }[t]}</button>`).join("")}
@@ -231,7 +231,7 @@ async function renderVideo(id) {
     if (!hook) return toast("Pick a hook", true);
     try {
       await api(`/api/jobs/${encodeURIComponent(id)}/choose`, { method: "POST",
-        body: JSON.stringify({ hook, title: pickForm.title.value.trim() }) });
+        body: JSON.stringify({ hook, title: pickForm.title.value.trim(), variants: readVersions(pickForm) }) });
       toast("Making the video for your hook — follow it live");
       pickForm.querySelector("button").disabled = true;
       setTimeout(() => renderVideo(id), 800);
@@ -263,10 +263,22 @@ async function renderVideo(id) {
       route();
     } catch (e) { toast(e.message, true); }
   });
-  $("#variants-btn")?.addEventListener("click", async () => {
+  const variantsForm = $("#variants-form");
+  const drawVersionRows = () => {
+    const rows = $("#variants-rows");
+    if (!rows) return;
+    rows.hidden = !$("#variants-pick").checked;
+    const n = Number($("#variants-count").value);
+    rows.innerHTML = rows.hidden ? "" : versionRows(plan, scores, result?.hook, n, Array.from({ length: n }, (_, i) => `New version ${i + 1}`));
+  };
+  $("#variants-pick")?.addEventListener("change", drawVersionRows);
+  $("#variants-count")?.addEventListener("change", drawVersionRows);
+  variantsForm?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
     const count = Number($("#variants-count").value);
+    const picks = $("#variants-pick")?.checked ? readVersions(variantsForm) : null;
     try {
-      await api(`/api/jobs/${encodeURIComponent(id)}/variants`, { method: "POST", body: JSON.stringify({ count }) });
+      await api(`/api/jobs/${encodeURIComponent(id)}/variants`, { method: "POST", body: JSON.stringify({ count, picks }) });
       toast(`Making ${count} more version(s) — they appear in Content`);
     } catch (e) { toast(e.message, true); }
   });
@@ -474,15 +486,19 @@ function coverCard(base, cover, sceneData, files) {
       and on Instagram when PUBLIC_BASE_URL is set. TikTok and X take no cover through their API — download it and pick it in the app.</p></section>`;
 }
 
-function variantsCard(result) {
+function variantsCard(result, plan) {
   if (!result) return "";
   return `<section class="card" style="margin-top:16px"><h3>Versions for A/B testing</h3>
     <p class="muted">Each new version keeps the topic and the facts but gets the next-best hook, another title, voice,
       music, caption colour and new pictures — a real alternative, not a disguised copy (YouTube treats near-duplicates
       as spam). Post different versions to different platforms, or a few days apart, and keep the winner.</p>
-    <div class="actions"><select id="variants-count"><option value="1">1 more</option><option value="2">2 more</option>
-      <option value="3">3 more</option><option value="4">4 more</option></select>
-      <button class="btn btn-outline" id="variants-btn">Make versions</button></div></section>`;
+    <form id="variants-form">
+      <div class="actions"><select id="variants-count"><option value="1">1 more</option><option value="2">2 more</option>
+        <option value="3">3 more</option><option value="4">4 more</option></select>
+        <button class="btn btn-outline" id="variants-btn">Make versions</button></div>
+      ${plan?.hooks?.length ? `<label class="check"><input type="checkbox" id="variants-pick"> Let me pick the hook and title for each version</label>
+        <div id="variants-rows" hidden></div>` : ""}
+    </form></section>`;
 }
 
 function sceneList(sceneData, base, busy, version) {
@@ -522,13 +538,42 @@ function hookRounds(hc) {
       ${rejected.map((x) => `<div class="issue">“${esc(x.hook)}” — ${esc(x.reason)}</div>`).join("")}</details>` : ""}</div>`;
 }
 
-// a video that waits after its script: every hook (each has its own closing line) and title, best first
-function pickCard(plan, scores, pick) {
-  const norm = (t) => (t || "").replace(/\s+/g, " ").trim();
-  const hookScores = Object.fromEntries((scores?.hooks || []).map((h) => [norm(h.hook), h]));
-  const hooks = plan.hooks.map((h) => ({ h, s: hookScores[norm(h.text)] }))
+const normText = (t) => (t || "").replace(/\s+/g, " ").trim();
+
+// a plan's hooks and titles, best score first
+function rankedPicks(plan, scores) {
+  const hookScores = Object.fromEntries((scores?.hooks || []).map((h) => [normText(h.hook), h]));
+  const hooks = plan.hooks.map((h) => ({ h, s: hookScores[normText(h.text)] }))
     .sort((a, b) => (b.s?.verdict ?? -1) - (a.s?.verdict ?? -1));
   const titles = scores?.titles?.length ? [...scores.titles].sort((a, b) => b.score - a.score) : plan.titles.map((t) => ({ title: t }));
+  return { hooks, titles };
+}
+
+// one hook and title per A/B version; the defaults are what the Studio would pick (next-best hook, another title)
+function versionRows(plan, scores, usedHook, count, letters) {
+  const { hooks, titles } = rankedPicks(plan, scores);
+  const others = hooks.filter(({ h }) => normText(h.text) !== normText(usedHook));
+  const pool = others.length ? others : hooks;
+  return `<datalist id="version-titles">${titles.map((t) => `<option value="${esc(t.title)}">`).join("")}</datalist>` +
+    Array.from({ length: count }, (_, i) => {
+      const def = normText(pool[i % pool.length].h.text);
+      return `<div class="version-pick"><h3>${esc(letters[i])}</h3>
+        <label>Hook<select name="vhook">${hooks.map(({ h, s }) => `<option value="${esc(normText(h.text))}" ${normText(h.text) === def ? "selected" : ""}>${s ? s.verdict + " · " : ""}${esc(h.text)}</option>`).join("")}</select></label>
+        <label>Title<input name="vtitle" list="version-titles" maxlength="100" required value="${esc(titles.length ? titles[(i + 1) % titles.length].title : "")}"></label></div>`;
+    }).join("");
+}
+
+// the picked versions of a form with versionRows, as [{hook, title}]
+function readVersions(form) {
+  const titles = [...form.querySelectorAll("input[name=vtitle]")];
+  return [...form.querySelectorAll("select[name=vhook]")].map((s, i) => ({ hook: s.value, title: titles[i].value.trim() }));
+}
+
+// a video that waits after its script: every hook (each has its own closing line) and title, best first
+function pickCard(plan, scores, pick) {
+  const norm = normText;
+  const { hooks, titles } = rankedPicks(plan, scores);
+  const versions = pick?.versions || 0;
   return `<section class="card"><h2>Pick the hook and title</h2>
     <p class="muted">The script is written and checked. The voice-over, pictures and subtitles are made for the hook you pick — each hook has its own closing line.</p>
     <form id="pick-form">
@@ -541,7 +586,10 @@ function pickCard(plan, scores, pick) {
         <div class="score" title="title.py score">${t.score ?? "—"}</div><div>${esc(t.title)}</div></label>`).join("")}
       <label>Title as published${pick?.prefix ? ` <span class="muted">(“${esc(pick.prefix)}” is added if it is missing)</span>` : ""}
         <input name="title" value="${esc(pick?.title || "")}" maxlength="100" required></label>
-      <button class="btn btn-primary">Make the video</button>
+      ${versions ? `<h2 style="margin-top:24px">A/B versions</h2>
+        <p class="muted">The video above is version A. Each version below gets the hook and title you pick here, plus its own voice, music and pictures.</p>
+        ${versionRows(plan, scores, pick?.hook, versions, Array.from({ length: versions }, (_, i) => `Version ${"BCDE"[i]}`))}` : ""}
+      <button class="btn btn-primary">${versions ? `Make the video and ${versions} version(s)` : "Make the video"}</button>
     </form></section>`;
 }
 
@@ -1693,6 +1741,7 @@ async function openNew() {
   try { f.choose.checked = localStorage.getItem("vs-choose") === "1"; } catch { /* only a convenience */ }
   try {
     const { fields } = await api("/api/settings");
+    if (fields.find((x) => x.key === "PICK_HOOK")?.value === "true") f.choose.checked = true; // Settings → Content
     newFields = fields.filter((x) => NEW_OPTION_KEYS.includes(x.key));
     const box = $("#new-options");
     box.innerHTML = newFields.map((x) => `<label class="setting"><span>${esc(x.label)}</span>${fieldInput(x, "", `as in Settings (${x.value || "—"})`)}</label>`).join("");
