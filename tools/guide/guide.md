@@ -354,7 +354,7 @@ Vid Studio (раньше называлась VidAuto) сама делает к�
 Каждый день в 9:00 по Киеву n8n запускает ролик для каждого канала с отметкой «Make a video every day at 9:00» (раздел 21) — по очереди, по 6–10 минут на канал. Тема — следующая из очереди Topics.
 
 | Шаг | Что происходит сейчас |
-| 9:00 | Сценарий и проверки, затем ролик ждёт выбора хука («✍ Pick the hook and title» в Telegram) |
+| 9:00 | Сценарий и проверки, затем ролик ждёт выбора хука («✍ Pick the hook and title» в Telegram). Час запуска меняется только в n8n (блок «Каждый день в 9:00»), а не в Publish time |
 | После выбора | Озвучка, картинки, монтаж, обложка (5–10 минут) |
 | Публикация | YouTube, TikTok (приватно), Instagram, Facebook, Threads. На YouTube — публично сразу (AUTO_PUBLISH включён) |
 | Telegram | «✅ Ready…» и «📤 …» по каждой платформе со ссылками |
@@ -544,6 +544,7 @@ Vid Studio (раньше называлась VidAuto) сама делает к�
 | «redirect_uri mismatch» | Redirect URI в приложении должен совпадать с карточкой символ в символ |
 | Facebook: «Invalid Scopes» | Нужна Configuration ID (раздел 10.5) |
 | Facebook: «manages no Page» | При входе отметьте страницу и дайте ей все права; в конфигурации должен быть Asset Pages |
+| Instagram: «Object with ID … does not exist» | Вход Instagram потерял доступ к аккаунту — переподключите по разделу 10.4 (User access token) |
 | Instagram / Threads: «API access blocked» | Meta ограничила приложение — пройдите account confirmation в Facebook / Meta и опубликуйте снова |
 | TikTok: пост приватный | Так и должно быть до проверки приложения TikTok (10.3) |
 | X: ошибка 402 | Кончились кредиты X API |
