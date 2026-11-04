@@ -397,6 +397,10 @@ def _profile(platform, acct):
                             "url": f"https://facebook.com/{first['id']}"}}
     if platform == "instagram":
         ids = _ig_accounts(t)
+        page = _ig_page(t, ids[0])
+        if page:   # a person's login: post with the linked Page's token, which never expires
+            t = acct["access_token"] = page["access_token"]
+            acct.pop("expires_at", None)
         me =_call("GET", f"{GRAPH}/{ids[0]}", params={"fields": "id,username,profile_picture_url",
                                                       "access_token": t})
         return {"user_id": me["id"],
@@ -420,6 +424,24 @@ def _profile(platform, acct):
                                                     "avatar": u.get("profile_image_url"),
                                                     "url": f"https://x.com/{u.get('username', '')}"}}
     return {}
+
+
+def _ig_page(token, ig_id):
+    """The Facebook Page an Instagram account is linked to, with its token; None for a system-user login."""
+    fields = "id,access_token,instagram_business_account"
+    try:
+        pages = _call("GET", f"{GRAPH}/me/accounts", params={"fields": fields, "access_token": token}).get("data") or []
+        if not pages:   # a Page in a business portfolio: the Pages this login was granted
+            app = _apps()["instagram"]
+            scopes = (_call("GET", f"{GRAPH}/debug_token", params={
+                "input_token": token, "access_token": f"{app['client_id']}|{app['client_secret']}"})
+                .get("data") or {}).get("granular_scopes") or []
+            ids = dict.fromkeys(i for s in scopes if s.get("scope") == "pages_show_list" for i in s.get("target_ids") or [])
+            pages = [_call("GET", f"{GRAPH}/{i}", params={"fields": fields, "access_token": token}) for i in ids]
+    except SocialError:
+        return None
+    return next((p for p in pages if p.get("access_token")
+                 and (p.get("instagram_business_account") or {}).get("id") == ig_id), None)
 
 
 def _ig_accounts(token):
