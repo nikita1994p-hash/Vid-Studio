@@ -9,6 +9,7 @@
 import datetime
 import hmac
 import json
+import secrets
 import socket
 import threading
 import time
@@ -26,6 +27,7 @@ from pydantic import BaseModel
 import abtest
 import auth
 import earnings
+import mail
 import niches
 import notify
 import pipeline
@@ -34,8 +36,9 @@ import social
 import space
 import topics
 
-app = FastAPI(title="Vid Studio worker")
+app = FastAPI(title="Vid Studio worker", docs_url=None, redoc_url=None, openapi_url=None)   # no public API map
 _busy = threading.Lock()
+auth.alert = notify.security     # locked accounts, backup codes used, two-step switched off -> Telegram
 # cookies ignore the port: the sandbox on localhost:8001 must not overwrite the real Studio's login
 COOKIE = "vs_sandbox" if pipeline.SANDBOX else "vs_session"
 space.migrate()
@@ -225,6 +228,27 @@ class PasswordRequest(BaseModel):
     new: str
 
 
+class CodeRequest(BaseModel):
+    ticket: str = ""                    # from the password step
+    code: str = ""                      # 6 digits from the authenticator app, or a backup code
+    timezone: str | None = None
+    language: str | None = None
+
+
+class ResetRequest(BaseModel):
+    email: str = ""
+
+
+class ResetFinishRequest(BaseModel):
+    token: str
+    password: str
+
+
+class TwoStepRequest(BaseModel):
+    code: str = ""
+    password: str = ""
+
+
 class MarketingRequest(BaseModel):
     marketing: bool
     reason: str | None = None           # why they unsubscribed (optional)
@@ -254,18 +278,31 @@ class UserEditRequest(BaseModel):
     plan: str | None = None             # free | trial | pro (super admin / owner only)
 
 
+def _oops(e):
+    """An unexpected error: the full text goes to the log under a short reference, the browser gets
+    only the reference (no file paths, settings or library internals)."""
+    ref = secrets.token_hex(3)
+    print(f"[error {ref}] {type(e).__name__}: {e}", flush=True)
+    traceback.print_exc()
+    return f"something went wrong (ref {ref}) - try again; if it repeats, tell the Studio admin this ref"
+
+
 def _fail(e):
     if isinstance(e, (auth.AuthError, space.SpaceError)):
         raise HTTPException(409 if "create a channel" in str(e) else 400, str(e))
-    if isinstance(e, pipeline.PipelineError):
+    if isinstance(e, pipeline.PipelineError):   # the Studio's own messages: safe and useful to show
         raise HTTPException(400 if "bad job id" in str(e) or "no such" in str(e) else 500, str(e))
-    traceback.print_exc()
-    raise HTTPException(500, f"{type(e).__name__}: {e}")
+    raise HTTPException(500, _oops(e))
 
 
 @app.exception_handler(space.SpaceError)
 def _no_channel(request, e):
     return JSONResponse({"detail": str(e)}, status_code=409)
+
+
+@app.exception_handler(Exception)
+def _unexpected(request, e):
+    return JSONResponse({"detail": _oops(e)}, status_code=500)
 
 
 # ------------------------------------------------------------------ sessions and channels
@@ -306,6 +343,8 @@ def _throttle(request, what, limit, seconds):
     with _hits_lock:
         recent = [t for t in _hits.get(key, []) if now - t < seconds]
         if len(recent) >= limit:
+            notify.security("throttle", f"🚦 {limit} {what} attempts in {seconds // 60} min from one address "
+                                        f"({key[1]}) - it is paused. Someone may be guessing passwords.", f"{what}|{key[1]}")
             raise HTTPException(429, "too many attempts from your network - wait a few minutes and try again")
         _hits[key] = recent + [now]
         if len(_hits) > 10000:   # forget addresses that went quiet
@@ -358,6 +397,27 @@ def _security_headers():
     return headers
 
 
+UNSAFE = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def _foreign_origin(request):
+    """True for a change (POST/PUT/PATCH/DELETE) a browser sends from another site's page: a second lock
+    against cross-site requests next to the SameSite cookie. Requests without Origin (n8n, curl) pass."""
+    if request.method not in UNSAFE:
+        return False
+    origin = request.headers.get("origin")
+    if not origin:
+        return request.headers.get("sec-fetch-site") == "cross-site"
+    host = urllib.parse.urlsplit(origin).netloc.lower()
+    allowed = {request.headers.get("host", "").lower(), request.headers.get("x-forwarded-host", "").lower(),
+               urllib.parse.urlsplit(pipeline.env("PUBLIC_BASE_URL", "")).netloc.lower()}
+    return host not in allowed - {""}
+
+
+# what an owner / super admin without two-step sign-in may still open: the page, their account, signing out
+TWO_STEP_OPEN = ("/api/me", "/api/auth/", "/api/health")
+
+
 def _job_in(path):
     parts = path.strip("/").split("/")
     if len(parts) >= 3 and parts[:2] == ["api", "jobs"]:
@@ -372,6 +432,8 @@ async def studio_session(request, call_next):
     """Who is asking and in which channel. A browser needs a session; the page or API call then runs
     inside the user's open channel - or the channel of the video in the URL, if it is theirs."""
     path = request.url.path
+    if _foreign_origin(request) and not path.startswith(INTERNAL):
+        return JSONResponse({"detail": "this request came from another website and was refused"}, status_code=403)
     if path.startswith(OPEN) or (path.startswith("/oauth/") and path.endswith("/callback")):
         return await call_next(request)
     parts = path.split("/")
@@ -397,6 +459,10 @@ async def studio_session(request, call_next):
             return RedirectResponse("/login" + (f"?{request.url.query}" if request.url.query else ""))
         return JSONResponse({"detail": "sign in first"}, status_code=401)
     request.state.user = user
+    if (auth.two_step_required(user) and not user.get("totp_on") and path.startswith(("/api/", "/files/", "/oauth/"))
+            and not path.startswith(TWO_STEP_OPEN)):
+        return JSONResponse({"detail": "turn on two-step sign-in first (My account)", "two_step_setup": True},
+                            status_code=403)
     job_cid = space.find_job(_job_in(path))
     if job_cid and not auth.may_open(user, job_cid):
         return JSONResponse({"detail": "no such video"}, status_code=404)
@@ -516,8 +582,76 @@ def login(req: SignInRequest, response: Response, request: Request):
         user = auth.authenticate(req.email, req.password, req.timezone, req.language)
     except Exception as e:
         _fail(e)
+    if user.get("totp_on"):          # the password was right: the code from the phone is next
+        return {"two_step": True, "ticket": auth.start_two_step(user)}
     _sign_in(response, user)
     return {"user": auth.public(user)}
+
+
+@app.post("/api/auth/login/code")
+def login_code(req: CodeRequest, response: Response, request: Request):
+    _throttle(request, "sign-in", 20, 600)
+    try:
+        user = auth.finish_two_step(req.ticket, req.code, req.timezone, req.language)
+    except Exception as e:
+        _fail(e)
+    _sign_in(response, user)
+    return {"user": auth.public(user)}
+
+
+def _base_url(request):
+    return (pipeline.env("PUBLIC_BASE_URL") or str(request.base_url)).rstrip("/")
+
+
+@app.post("/api/auth/reset")
+def reset_request(req: ResetRequest, request: Request):
+    """'Forgot password?': a one-time link by e-mail. The answer is the same whether or not the e-mail
+    has an account, so nobody can use this page to find out who uses the Studio."""
+    _throttle(request, "password reset", 10, 3600)
+    user, token = auth.request_reset(req.email)
+    if user:
+        link = f"{_base_url(request)}/login?reset={token}"
+        if pipeline.SANDBOX:
+            print(f"[sandbox] reset link for {user['email']}: {link}", flush=True)
+        try:
+            mail.send(user["email"], "Reset your Vid Studio password",
+                      f"Someone (hopefully you) asked to reset the password of your Vid Studio account.\n\n"
+                      f"Open this link to choose a new password:\n{link}\n\n"
+                      f"It works once, for {auth.RESET_MINUTES} minutes. If you did not ask for it, ignore this "
+                      "e-mail: your password stays the same.\n\n— Vid Studio")
+        except mail.MailError as e:
+            print(f"[warn] reset e-mail not sent: {e}", flush=True)
+            if not pipeline.SANDBOX:
+                notify.security("mail", f"✉ A password reset e-mail could not be sent: {e}", "mail")
+    return {"sent": True, "minutes": auth.RESET_MINUTES}
+
+
+@app.get("/api/auth/reset/{token}")
+def reset_check(token: str, request: Request):
+    _throttle(request, "reset link", 30, 3600)
+    info = auth.reset_info(token)
+    if not info:
+        raise HTTPException(400, "this link has expired or was already used - ask for a new one")
+    return info
+
+
+@app.post("/api/auth/reset/finish")
+def reset_finish(req: ResetFinishRequest, request: Request):
+    _throttle(request, "reset link", 30, 3600)
+    try:
+        user = auth.finish_reset(req.token, req.password)
+    except Exception as e:
+        _fail(e)
+    try:
+        mail.send(user["email"], "Your Vid Studio password was changed",
+                  "The password of your Vid Studio account was just changed with a reset link, and every device "
+                  "was signed out.\n\nIf this was not you, reset the password again at once and tell the Studio "
+                  "admin.\n\n— Vid Studio")
+    except mail.MailError as e:
+        print(f"[warn] password-changed e-mail not sent: {e}", flush=True)
+    notify.security("reset", f"🔁 {user['email']} reset the password with an e-mail link "
+                             f"(from {_client_ip(request)}).", user["email"])
+    return {"changed": True, "two_step": bool(user.get("totp_on"))}
 
 
 @app.post("/api/auth/logout")
@@ -549,6 +683,40 @@ def change_password(req: PasswordRequest, request: Request, response: Response):
         _fail(e)
     _sign_in(response, _user(request), space.current() if space.list_ids() else None)
     return {"changed": True}
+
+
+@app.post("/api/me/2fa/setup")
+def two_step_setup(request: Request):
+    """A new secret and its QR code for the authenticator app; on only after a code from it is typed."""
+    import segno
+    out = auth.two_step_begin(_user(request)["id"])
+    return {**out, "qr": segno.make(out["uri"], error="m").svg_data_uri(scale=5, border=2)}
+
+
+@app.post("/api/me/2fa/enable")
+def two_step_enable(req: TwoStepRequest, request: Request):
+    try:
+        codes = auth.two_step_enable(_user(request)["id"], req.code)
+    except Exception as e:
+        _fail(e)
+    return {"on": True, "backup_codes": codes}
+
+
+@app.post("/api/me/2fa/disable")
+def two_step_disable(req: TwoStepRequest, request: Request):
+    try:
+        auth.two_step_disable(_user(request)["id"], req.password, req.code)
+    except Exception as e:
+        _fail(e)
+    return {"on": False}
+
+
+@app.post("/api/me/2fa/backup-codes")
+def two_step_backup(req: TwoStepRequest, request: Request):
+    try:
+        return {"backup_codes": auth.new_backup_codes(_user(request)["id"], req.code)}
+    except Exception as e:
+        _fail(e)
 
 
 @app.put("/api/me/marketing")
@@ -624,7 +792,8 @@ def users(request: Request, q: str = ""):
 def edit_user(user_id: str, req: UserEditRequest, request: Request):
     wanted = [a for a, v in (("block", req.disabled), ("password", req.password), ("role", req.role),
                              ("plan", req.plan)) if v is not None]
-    _managed(request, user_id, *wanted)
+    admin = _managed(request, user_id, *wanted)
+    target = auth.get(user_id)
     try:
         if req.disabled is not None:
             auth.set_disabled(user_id, req.disabled)
@@ -636,6 +805,22 @@ def edit_user(user_id: str, req: UserEditRequest, request: Request):
             auth.set_plan(user_id, req.plan)
     except Exception as e:
         _fail(e)
+    who = f"{admin['email']} → {target['email']}"
+    if req.role and req.role != target.get("role"):
+        notify.security("role", f"👑 Role changed: {who}: {target.get('role')} → {req.role}", f"{user_id}|{req.role}")
+    if req.password:
+        notify.security("password", f"🔑 Password set by an admin: {who}", user_id)
+    if req.disabled is not None and req.disabled != bool(target.get("disabled")):
+        notify.security("block", f"{'⛔ Blocked' if req.disabled else '✅ Unblocked'}: {who}", f"{user_id}|{req.disabled}")
+    return auth.public(auth.get(user_id))
+
+
+@app.post("/api/users/{user_id}/reset-2fa")
+def reset_two_step(user_id: str, request: Request):
+    """Someone lost the phone and the backup codes: two-step goes off, every device is signed out."""
+    admin = _managed(request, user_id, "twostep")
+    auth.two_step_reset(user_id)
+    notify.security("2fa-reset", f"🔓 Two-step sign-in reset: {admin['email']} → {auth.get(user_id)['email']}", user_id)
     return auth.public(auth.get(user_id))
 
 
@@ -651,6 +836,7 @@ def logout_user(user_id: str, request: Request):
 def delete_user(user_id: str, request: Request):
     """The account goes; its channels stay on disk and move to the admin who deleted it."""
     owner = _managed(request, user_id, "delete")
+    gone = (auth.get(user_id) or {}).get("email")
     try:
         auth.delete(user_id)
     except Exception as e:
@@ -658,6 +844,7 @@ def delete_user(user_id: str, request: Request):
     for c in space.all_channels():
         if c.get("owner") == user_id:
             space.update(c["id"], owner=owner["id"])
+    notify.security("delete", f"🗑 Account deleted: {owner['email']} → {gone}", user_id)
     return {"deleted": user_id}
 
 
@@ -1321,6 +1508,14 @@ def put_notify(req: TelegramRequest):
 def find_chat():
     try:
         return notify.find_chat()
+    except Exception as e:
+        _fail(e)
+
+
+@app.post("/api/notify/topics")
+def notify_topics():
+    try:
+        return notify.setup_topics()
     except Exception as e:
         _fail(e)
 

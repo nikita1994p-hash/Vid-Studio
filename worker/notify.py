@@ -19,6 +19,11 @@ STATE = space.Here("notify_state.json")     # which one-per-day alerts were alre
 API = "https://api.telegram.org/bot{token}/{method}"
 EVENTS = {"done": "NOTIFY_DONE", "error": "NOTIFY_ERRORS", "limit": "NOTIFY_LIMITS",
           "money": "NOTIFY_MONEY", "ab": "NOTIFY_AB", "posted": "NOTIFY_POSTED"}
+# a group with Topics on: each kind of alert goes to its own topic (made by setup_topics)
+TOPICS = {"videos": "🎬 Videos", "errors": "⚠️ Errors", "money": "💰 Money", "accounts": "👥 Accounts",
+          "security": "🔐 Security"}
+TOPIC_OF = {"done": "videos", "posted": "videos", "ab": "videos", "error": "errors", "limit": "errors",
+            "money": "money", "account": "accounts", "security": "security"}
 
 
 def _config():
@@ -47,7 +52,8 @@ def _call(token, method, params=None, timeout=15):
 def status():
     c = _config()
     return {"configured": bool(c.get("bot_token") and c.get("chat_id")), "has_token": bool(c.get("bot_token")),
-            "bot": c.get("bot_name"), "chat": c.get("chat_name"),
+            "bot": c.get("bot_name"), "chat": c.get("chat_name"), "group": str(c.get("chat_id") or "").startswith("-"),
+            "topics": sorted(c.get("topics") or {}, key=list(TOPICS).index),
             "events": {k: pipeline.flag(v, "true") for k, v in EVENTS.items()}}
 
 
@@ -75,7 +81,33 @@ def find_chat():
     if not chats:
         raise PipelineError(f"no message yet: open {c.get('bot_name', 'your bot')} in Telegram, press Start, then try again")
     chat = chats[-1]
+    if str(chat["id"]) != str(c.get("chat_id")):
+        c.pop("topics", None)
     c.update(chat_id=str(chat["id"]), chat_name=chat.get("username") or chat.get("first_name") or chat.get("title"))
+    pipeline._write_json(CONFIG, c)
+    return status()
+
+
+def setup_topics():
+    """Make the topics (Videos, Errors, Money, Accounts, Security) in the connected group. The group needs
+    Topics switched on and the bot as an admin that may manage topics. Topics already made are kept."""
+    c = _config()
+    if not (c.get("bot_token") and c.get("chat_id")):
+        raise PipelineError("connect the bot and find the chat first")
+    chat = _call(c["bot_token"], "getChat", {"chat_id": c["chat_id"]})
+    if chat.get("type") == "private":
+        raise PipelineError("this is a private chat with the bot - topics need a group (see the steps above)")
+    if not chat.get("is_forum"):
+        raise PipelineError("Topics are off in this group: open the group -> Edit -> Topics -> on, then press again")
+    topics = c.get("topics") or {}
+    for key, name in TOPICS.items():
+        if key not in topics:
+            try:
+                made = _call(c["bot_token"], "createForumTopic", {"chat_id": c["chat_id"], "name": name})
+            except PipelineError as e:
+                raise PipelineError(f"{e} - make the bot an admin of the group with “Manage topics” on")
+            topics[key] = made["message_thread_id"]
+    c["topics"] = topics
     pipeline._write_json(CONFIG, c)
     return status()
 
@@ -90,12 +122,16 @@ def _keyboard(buttons):
         [{"text": label, "callback_data": data[:64]} for label, data in row] for row in buttons]})
 
 
-def _send_now(text, buttons=None):
-    if pipeline.SANDBOX:
-        print(f"[sandbox] telegram not sent: {text[:200]}", flush=True)
-        return
+def _send_now(text, buttons=None, event=None, topic=None):
+    """topic: a key of TOPICS; without it the event's topic (in a group with topics), else the main chat."""
     c = _config()
+    thread = (c.get("topics") or {}).get(topic or TOPIC_OF.get(event))
+    if pipeline.SANDBOX:
+        print(f"[sandbox] telegram not sent ({topic or TOPIC_OF.get(event) or 'main'}): {text[:200]}", flush=True)
+        return
     params = {"chat_id": c["chat_id"], "text": text[:4000], "disable_web_page_preview": "true"}
+    if thread:
+        params["message_thread_id"] = thread
     if buttons:
         params["reply_markup"] = _keyboard(buttons)
     _call(c["bot_token"], "sendMessage", params)
@@ -106,6 +142,8 @@ def test():
         raise PipelineError("connect the bot first")
     _send_now("✅ Vid Studio is connected. You will get alerts here.\nPress the button to check that buttons work:",
               [[("👆 Test button", f"tst|{space.current()}")]])
+    for key in _config().get("topics") or {}:
+        _send_now(f"✅ {TOPICS[key]}: alerts of this kind come to this topic.", topic=key)
     return {"sent": True}
 
 
@@ -122,7 +160,7 @@ def send(event, text, buttons=None):
 
     def run():
         try:
-            _send_now(text, buttons)
+            _send_now(text, buttons, event)
         except Exception as e:
             print(f"[warn] telegram alert not sent: {e}", flush=True)
 
@@ -256,6 +294,17 @@ def _admin_channels():
     return out
 
 
+def _to_admins(event, text, buttons=None):
+    """Once to every bot + chat of the super admins' and owner's channels."""
+    sent = set()
+    for cid in _admin_channels():
+        with space.use(cid):
+            c = _config()
+            if c.get("bot_token") and (c["bot_token"], c.get("chat_id")) not in sent and send(event, text, buttons):
+                sent.add((c["bot_token"], c.get("chat_id")))
+    return len(sent)
+
+
 def new_account(user, source):
     """Someone signed up: tell the admins, with a button that gives a trial (never blocks sign-up)."""
     import plans
@@ -265,14 +314,27 @@ def new_account(user, source):
                 + (" (invite)" if user.get("invite") else "")
                 + ("\n✉ agreed to news and offers" if user.get("marketing") else ""))
         buttons = None if plan != "none" else [[(f"🎁 Give a {plans.PLANS['trial']['days']}-day trial", f"trl|{user['id']}")]]
-        sent = set()
-        for cid in _admin_channels():
-            with space.use(cid):
-                c = _config()
-                if c.get("bot_token") and (c["bot_token"], c.get("chat_id")) not in sent and send("account", text, buttons):
-                    sent.add((c["bot_token"], c.get("chat_id")))
+        _to_admins("account", text, buttons)
     except Exception as e:
         print(f"[warn] sign-up alert: {e}", flush=True)
+
+
+_security_sent = {}   # (kind, key) -> last time: one alert of a kind per account / address per hour
+
+
+def security(kind, text, key=""):
+    """A security alert (locked account, role change, two-step off...) to the admins' Security topic.
+    The same kind about the same account or address at most once an hour. Never raises."""
+    import time
+    now = time.time()
+    if now - _security_sent.get((kind, key), 0) < 3600:
+        return
+    _security_sent[(kind, key)] = now
+    try:
+        if not _to_admins("security", text):
+            print(f"[security] no admin Telegram connected: {text[:200]}", flush=True)
+    except Exception as e:
+        print(f"[warn] security alert: {e}", flush=True)
 
 
 def _press(token, channels, cq):
@@ -348,8 +410,11 @@ def _command(token, channels, message):
         if c != chat:
             continue
         body, rows = menu(cid)
-        _call(token, "sendMessage", {"chat_id": chat, "text": body[:4000], "reply_markup": _keyboard(rows),
-                                     "disable_web_page_preview": "true"})
+        params = {"chat_id": chat, "text": body[:4000], "reply_markup": _keyboard(rows),
+                  "disable_web_page_preview": "true"}
+        if message.get("message_thread_id") and message.get("is_topic_message"):
+            params["message_thread_id"] = message["message_thread_id"]
+        _call(token, "sendMessage", params)
 
 
 _commands_set = set()

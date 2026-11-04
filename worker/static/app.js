@@ -736,10 +736,18 @@ async function renderSettings() {
       <p class="muted">1) In Telegram open <b>@BotFather</b>, send <code>/newbot</code>, copy the token it gives you.
         2) Paste it here and press Save. 3) Open your new bot${tg.bot ? ` (<b>${esc(tg.bot)}</b>)` : ""}, press <b>Start</b>,
         then press “Find my chat”. The token stays on this computer (<code>data\\accounts\\telegram.json</code>).</p>
+      <details class="muted"><summary>Alerts sorted into topics (one group: Videos, Errors, Money, Accounts, Security)</summary>
+        <ol><li>Telegram → ✏ New message → <b>New group</b>, name it e.g. “Vid Studio”, add your bot.</li>
+          <li>Open the group → its name → <b>Edit</b> → <b>Topics</b> → on → Save.</li>
+          <li>Group → <b>Administrators</b> → <b>Add admin</b> → your bot → keep <b>Manage topics</b> on → Save.</li>
+          <li>In the group type <code>/start${tg.bot ? esc(tg.bot) : "@your_bot"}</code>, then here press “Find my chat”
+            and “Make topics”. Each topic can be muted on its own.</li></ol></details>
+      ${tg.topics && tg.topics.length ? `<p class="small">Topics: ${tg.topics.map(esc).join(", ")}</p>` : ""}
       <div class="actions"><input id="tg-token" type="password" autocomplete="off" style="flex:1;min-width:220px"
           placeholder="${tg.has_token ? "token saved — paste a new one to replace it" : "123456789:AA…"}">
         <button type="button" class="btn btn-outline" id="tg-save">Save token</button>
         <button type="button" class="btn btn-outline" id="tg-find" ${tg.has_token ? "" : "disabled"}>Find my chat</button>
+        ${tg.group ? `<button type="button" class="btn btn-outline" id="tg-topics">Make topics</button>` : ""}
         <button type="button" class="btn btn-outline" id="tg-test" ${tg.configured ? "" : "disabled"}>Send test</button>
         ${tg.has_token ? `<button type="button" class="btn btn-text" id="tg-forget">Disconnect</button>` : ""}</div></div>`,
   };
@@ -829,6 +837,7 @@ async function renderSettings() {
       "Token saved — now open the bot, press Start, then “Find my chat”");
   });
   $("#tg-find")?.addEventListener("click", (ev) => tgAction(ev.target, () => api("/api/notify/find-chat", { method: "POST" }), "Chat found — press “Send test”"));
+  $("#tg-topics")?.addEventListener("click", (ev) => tgAction(ev.target, () => api("/api/notify/topics", { method: "POST" }), "Topics made — press “Send test”"));
   $("#tg-test")?.addEventListener("click", (ev) => tgAction(ev.target, () => api("/api/notify/test", { method: "POST" }), "Test message sent — check Telegram"));
   $("#tg-forget")?.addEventListener("click", (ev) => {
     if (confirm("Disconnect the Telegram bot? No more alerts until you connect it again.")) tgAction(ev.target, () => api("/api/notify", { method: "DELETE" }), "Disconnected");
@@ -1281,6 +1290,7 @@ async function route() {
   document.querySelectorAll("[data-nav]").forEach((a) =>
     a.classList.toggle("active", a.dataset.nav === (page || "dashboard") || (page === "video" && a.dataset.nav === "content")));
   try {
+    if (me && me.user.two_step_required && !me.user.two_step) { await renderAccount(); return; }
     // no plan: own videos stay viewable, everything else shows the welcome screen
     if (me && !hasAccess() && !["account", "users", "stats"].includes(page)
         && !(me.channel && ["content", "video"].includes(page))) renderNoPlan();
@@ -1441,6 +1451,35 @@ async function renderAccount() {
         </div>
       </div>
     </div>
+    ${u.two_step_required && !u.two_step ? `<div class="card warn-box"><b>Turn on two-step sign-in to continue.</b>
+      As the ${esc(ROLE_NAME[u.role] || "owner")} you control every account, so the Studio asks for a code from your phone
+      at every sign-in. It takes a minute.</div>` : ""}
+    <div class="card" id="two-step-card"><h2>Two-step sign-in ${u.two_step ? `<span class="chip done">on</span>` : ""}</h2>
+      ${u.two_step ? `<p class="muted">After the password the Studio asks for the 6-digit code from your authenticator app.
+          Backup codes left: <b>${u.backup_codes_left}</b>${u.backup_codes_left < 3 ? " - make new ones" : ""}.</p>
+        <form id="ts-manage" class="settings-form">
+          <label>Code from the app<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required></label>
+          ${u.two_step_required ? "" : `<label>Password (only to turn it off)<input name="password" type="password" autocomplete="current-password"></label>`}
+          <div class="actions"><button class="btn btn-outline" data-ts="codes">New backup codes</button>
+            ${u.two_step_required ? `<span class="muted small">Required for the ${esc(ROLE_NAME[u.role])}: it cannot be turned off.</span>`
+              : `<button class="btn btn-text btn-danger" data-ts="off">Turn off</button>`}</div>
+        </form>`
+      : `<p class="muted">A code from your phone at every sign-in: a stolen password alone is not enough to get in.
+          You need Google Authenticator (or Microsoft Authenticator, 1Password, Authy).</p>
+        <div class="actions"><button class="btn btn-primary" id="ts-start">Set up two-step sign-in</button></div>
+        <div id="ts-setup" hidden>
+          <ol class="muted">
+            <li>In Google Authenticator press <b>+</b> → <b>Scan a QR code</b> and scan this
+              (on the same phone: <b>Enter a setup key</b> and type the key below, type “Time based”).</li>
+            <li>Type the 6-digit code the app shows for <b>Vid Studio</b> and press Turn on.</li></ol>
+          <img id="ts-qr" alt="QR code for the authenticator app" style="background:#fff;border-radius:12px;padding:6px;max-width:220px">
+          <p class="small">Setup key: <code id="ts-secret"></code></p>
+          <form id="ts-enable" class="actions"><input name="code" inputmode="numeric" autocomplete="one-time-code"
+              maxlength="7" placeholder="123456" required style="max-width:140px;font-size:18px;letter-spacing:3px">
+            <button class="btn btn-primary">Turn on</button></form>
+        </div>`}
+      <div id="ts-codes" hidden></div>
+    </div>
     <div class="card"><h2>Change password</h2>
       <form id="pw-form" class="settings-form">
         <label>Current password<input name="old" type="password" autocomplete="current-password" required></label>
@@ -1467,6 +1506,55 @@ async function renderAccount() {
   $("#unsub-cancel").addEventListener("click", () => {
     $("#acc-marketing").checked = true;
     $("#unsub").hidden = true;
+  });
+  const showCodes = (codes) => {
+    const box = $("#ts-codes");
+    box.hidden = false;
+    box.innerHTML = `<div class="ok-box"><b>Your backup codes</b> - each one works once instead of the phone code.
+      Save them now (print, a password manager, a photo in a safe place): they are not shown again.
+      <pre style="font-size:16px;margin:10px 0">${codes.map(esc).join("\n")}</pre>
+      <div class="actions"><button class="btn btn-outline" id="ts-copy">Copy</button>
+        <button class="btn btn-primary" id="ts-saved">I saved them</button></div></div>`;
+    $("#ts-copy").addEventListener("click", () => navigator.clipboard?.writeText(codes.join("\n")).then(() => toast("Copied")));
+    $("#ts-saved").addEventListener("click", async () => { await loadMe(); route(); });
+  };
+  $("#ts-start")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      const d = await api("/api/me/2fa/setup", { method: "POST" });
+      $("#ts-qr").src = d.qr;
+      $("#ts-secret").textContent = d.secret;
+      $("#ts-setup").hidden = false;
+      e.target.hidden = true;
+      $("#ts-enable").code.focus();
+    } catch (err) { toast(err.message, true); e.target.disabled = false; }
+  });
+  $("#ts-enable")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const d = await api("/api/me/2fa/enable", { method: "POST", body: JSON.stringify({ code: e.target.code.value }) });
+      $("#ts-setup").hidden = true;
+      toast("Two-step sign-in is on");
+      showCodes(d.backup_codes);
+    } catch (err) { toast(err.message, true); }
+  });
+  $("#ts-manage")?.addEventListener("click", async (e) => {
+    const act = e.target.dataset.ts;
+    if (!act) return;
+    e.preventDefault();
+    const f = $("#ts-manage");
+    try {
+      if (act === "codes") {
+        const d = await api("/api/me/2fa/backup-codes", { method: "POST", body: JSON.stringify({ code: f.code.value }) });
+        f.reset();
+        showCodes(d.backup_codes);
+      } else if (act === "off") {
+        if (!confirm("Turn two-step sign-in off? Then the password alone opens your account.")) return;
+        await api("/api/me/2fa/disable", { method: "POST", body: JSON.stringify({ code: f.code.value, password: f.password.value }) });
+        toast("Two-step sign-in is off");
+        renderAccount();
+      }
+    } catch (err) { toast(err.message, true); }
   });
   $("#pw-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1613,7 +1701,7 @@ async function renderUsers(query = renderUsers.q || "") {
       <thead><tr><th>E-mail / ID</th><th>Role</th><th>Plan</th><th>Source</th><th>Channels</th><th>News</th><th>Last sign-in</th><th>Signed in</th><th></th></tr></thead>
       <tbody>${users.map((u) => `
         <tr data-id="${esc(u.id)}">
-          <td><div>${esc(u.email)}${u.disabled ? ` <span class="chip error">blocked</span>` : ""}${u.id === me.user.id ? ` <span class="chip done">you</span>` : ""}</div>
+          <td><div>${esc(u.email)}${u.two_step ? ` <span title="Two-step sign-in is on">🔐</span>` : ""}${u.disabled ? ` <span class="chip error">blocked</span>` : ""}${u.id === me.user.id ? ` <span class="chip done">you</span>` : ""}</div>
             <code class="user-id" title="Click to copy">${esc(u.id)}</code></td>
           <td>${u.can.role ? `<select class="role-pick" data-u="role">${["user", "admin", "owner"].map((r) =>
             `<option value="${r}" ${r === u.role ? "selected" : ""}>${ROLE_NAME[r]}</option>`).join("")}</select>`
@@ -1630,6 +1718,7 @@ async function renderUsers(query = renderUsers.q || "") {
             ${u.can.password ? `<button class="btn btn-text" data-u="password">🔑 Password</button>` : ""}
             ${u.can.logout ? `<button class="btn btn-text" data-u="logout" ${u.sessions ? "" : "disabled"}>↪ Log out</button>` : ""}
             ${u.can.block ? `<button class="btn btn-text" data-u="toggle">${u.disabled ? "✅ Unblock" : "⛔ Block"}</button>` : ""}
+            ${u.can.twostep && u.two_step ? `<button class="btn btn-text" data-u="twostep">🔓 Reset 2-step</button>` : ""}
             ${u.can.delete ? `<button class="btn btn-text btn-danger" data-u="delete">🗑 Delete</button>` : ""}</td>
         </tr>`).join("") || `<tr><td colspan="9" class="muted">Nobody found.</td></tr>`}</tbody></table></div>
     ${isFullAdmin(me.user) ? `<section class="card" id="invites"><h2>Invite links</h2>
@@ -1678,6 +1767,13 @@ async function renderUsers(query = renderUsers.q || "") {
     const u = users.find((x) => x.id === id);
     const url = `/api/users/${encodeURIComponent(id)}`;
     try {
+      if (act === "twostep") {
+        if (!confirm(`Turn two-step sign-in off for ${u.email}? Do it only when they lost the phone and the backup codes `
+          + "and you are sure it is really them asking. They are signed out everywhere"
+          + (u.role === "user" || u.role === "admin" ? "." : " and must set it up again at the next sign-in."))) return;
+        await api(`${url}/reset-2fa`, { method: "POST" });
+        toast("Two-step sign-in reset");
+      }
       if (act === "toggle") {
         if (!u.disabled && !confirm(`Block ${u.email}? They are signed out and cannot sign in until unblocked.`)) return;
         await api(url, { method: "PATCH", body: JSON.stringify({ disabled: !u.disabled }) });

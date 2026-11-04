@@ -1,15 +1,20 @@
-"""Studio accounts: e-mail + password, sessions, the marketing-consent list.
+"""Studio accounts: e-mail + password, sessions, two-step codes, password resets, the marketing list.
 
-Stored in /data/users.json and /data/sessions.json. Passwords are scrypt hashes, session tokens are
-kept only as SHA-256 hashes. For the SaaS version swap this module's storage for a database;
-the functions keep their shape.
+Stored in /data/users.json and /data/sessions.json. Passwords are scrypt hashes; session tokens,
+reset links and backup codes are kept only as SHA-256 hashes. For the SaaS version swap this module's
+storage for a database; the functions keep their shape.
+
+Lost phone and backup codes (owner / super admin):  docker compose exec worker python auth.py reset-2fa EMAIL
 """
+import base64
 import csv
 import hashlib
 import hmac
 import io
 import re
 import secrets
+import struct
+import sys
 import threading
 import os
 import time
@@ -23,16 +28,31 @@ SUPERADMINS = {x.strip().lower() for x in os.environ.get("SUPERADMIN_EMAILS", ""
 FULL_ROLES = ("superadmin", "owner")         # every action on every account (but other super admins)
 ADMIN_ROLES = FULL_ROLES + ("admin",)       # may open the Users page
 ROLES = ("user", "admin", "owner")          # what a full admin may give; superadmin comes only from .env
-ACTIONS = ("password", "block", "logout", "delete", "role", "plan")
+ACTIONS = ("password", "block", "logout", "delete", "role", "plan", "twostep")
 UNSUBSCRIBE_REASONS = ("too many e-mails", "not useful", "I stopped using Vid Studio", "never signed up for it", "other")
 SOURCE_KEYS = ("ref", "utm_source", "utm_medium", "utm_campaign", "referrer", "landing", "wanted_plan")
 INVITES = space.ROOT / "invites.json"
 USERS = space.ROOT / "users.json"
 SESSIONS = space.ROOT / "sessions.json"
+RESETS = space.ROOT / "resets.json"
 SESSION_DAYS = 30
 MIN_PASSWORD = 8
+LOCK_TRIES = 5            # wrong passwords or codes in a row ...
+LOCK_MINUTES = 15         # ... lock the e-mail this long (a password reset unlocks it at once)
+RESET_MINUTES = 30        # a reset link works this long, once
+RESETS_PER_HOUR = 3       # reset e-mails per account per hour
+CODE_MINUTES = 5          # time to type the two-step code after the password
+ISSUER = "Vid Studio"
+COMMON = {"password", "password1", "password123", "12345678", "123456789", "1234567890", "qwerty123", "qwertyui",
+          "11111111", "00000000", "iloveyou", "abc12345", "letmein1", "welcome1", "admin123", "qwerty12",
+          "1q2w3e4r", "sunshine", "princess", "football", "baseball", "vidstudio", "youtube1"}
 _lock = threading.Lock()
-_failures = {}   # e-mail -> (count, last attempt): slows down password guessing
+_failures = {}   # e-mail -> (wrong tries in a row, last try): locks out password guessing
+_pending = {}    # hash of a two-step ticket -> (user id, expires): the password was right, the code is next
+
+
+def alert(kind, text, key=""):
+    """Security alerts for the admins; app.py points this at Telegram. Never raises."""
 
 
 class AuthError(Exception):
@@ -80,16 +100,24 @@ def _matches(password, stored):
     return hmac.compare_digest(_hash(password, bytes.fromhex(salt)), stored)
 
 
-def _check_password(password):
-    if len(password or "") < MIN_PASSWORD:
+def _check_password(password, email=""):
+    password = password or ""
+    if len(password) < MIN_PASSWORD:
         raise AuthError(f"the password needs at least {MIN_PASSWORD} characters")
+    if len(password) > 200:
+        raise AuthError("the password is too long (200 characters at most)")
+    low = password.lower()
+    if low in COMMON or len(set(low)) < 4 or (email and low in (email.lower(), email.lower().split("@")[0])):
+        raise AuthError("this password is too easy to guess - pick another one")
 
 
 def public(user):
     """What the browser may see about a user."""
     return {k: user.get(k) for k in ("id", "email", "role", "marketing", "marketing_at", "created",
                                       "last_login", "disabled", "plan", "trial_until", "timezone", "language")} | {
-        "plan": plans.name(user), "source": source_label(user), "sessions": active_sessions(user["id"])}
+        "plan": plans.name(user), "source": source_label(user), "sessions": active_sessions(user["id"]),
+        "two_step": bool(user.get("totp_on")), "two_step_required": two_step_required(user),
+        "backup_codes_left": len(user.get("backup_codes") or []) if user.get("totp_on") else 0}
 
 
 def _clean(value, size=100):
@@ -128,7 +156,7 @@ def register(email, password, marketing=False, source=None, timezone=None, langu
     source: where they came from (?ref= / utm_* of the sign-up link, the referring site).
     invite: an invite code - the account starts with the plan the invite gives; without one it has no plan."""
     email = _email(email)
-    _check_password(password)
+    _check_password(password, email)
     with _lock:
         users = _users()
         if any(u["email"] == email for u in users):
@@ -153,19 +181,241 @@ def get(user_id):
     return next((u for u in _users() if u["id"] == user_id), None)
 
 
-def authenticate(email, password, timezone=None, language=None):
-    email = (email or "").strip().lower()
+def _locked(email):
+    """Minutes left of a lock after LOCK_TRIES wrong tries, else 0."""
     count, last = _failures.get(email, (0, 0))
-    if count >= 5 and time.time() - last < 60 * min(count - 4, 15):
-        raise AuthError("too many wrong passwords - wait a few minutes")
+    left = LOCK_MINUTES * 60 - (time.time() - last)
+    return max(1, round(left / 60)) if count >= LOCK_TRIES and left > 0 else 0
+
+
+def _lock_error(minutes):
+    return AuthError(f"too many wrong tries - this account is locked for {minutes} more minute(s). "
+                     "Forgot your password? Use “Forgot password?” to reset it.")
+
+
+def _wrong(email, what):
+    count, _ = _failures.get(email, (0, 0))
+    count = 1 if count >= LOCK_TRIES else count + 1   # an earlier lock ran out: count again
+    _failures[email] = (count, time.time())
+    if count == LOCK_TRIES:
+        alert("lock", f"🔒 {email}: {LOCK_TRIES} wrong {what} in a row - the account is locked for "
+                      f"{LOCK_MINUTES} minutes.\nIf it was not its owner, someone is guessing.", email)
+
+
+def authenticate(email, password, timezone=None, language=None):
+    """The password step. With two-step sign-in on, the caller asks for the code next (start_two_step)."""
+    email = (email or "").strip().lower()
+    if _locked(email):
+        raise _lock_error(_locked(email))
     user = next((u for u in _users() if u["email"] == email), None)
     if not user or not _matches(password or "", user["password"]):
-        _failures[email] = (count + 1, time.time())
+        _wrong(email, "passwords")
+        if _locked(email):
+            raise _lock_error(LOCK_MINUTES)
         raise AuthError("wrong e-mail or password")
     if user.get("disabled"):
         raise AuthError("this account is blocked - ask the Studio admin")
-    _failures.pop(email, None)
+    if not user.get("totp_on"):
+        _signed_in(user, timezone, language)
+    return user
+
+
+def _signed_in(user, timezone=None, language=None):
+    _failures.pop(user["email"], None)
     _update(user["id"], last_login=_now(), **_locale(timezone, language))
+
+
+# ------------------------------------------------------------------ two-step sign-in (TOTP, RFC 6238)
+
+def two_step_required(user):
+    """The super admin and the Studio owner must use a code from an authenticator app."""
+    return bool(user) and user.get("role") in FULL_ROLES
+
+
+def _totp(secret, step):
+    key = base64.b32decode(secret + "=" * (-len(secret) % 8))
+    mac = hmac.new(key, struct.pack(">Q", step), hashlib.sha1).digest()
+    at = mac[-1] & 15
+    return "%06d" % ((struct.unpack(">I", mac[at:at + 4])[0] & 0x7FFFFFFF) % 1000000)
+
+
+def _app_code_ok(secret, code, last_step=0):
+    """The 30-second step the code belongs to (this one or the one before / after), else None.
+    A step already used is refused, so a code seen over someone's shoulder cannot be used again."""
+    now = int(time.time() // 30)
+    for step in (now - 1, now, now + 1):
+        if step > last_step and hmac.compare_digest(_totp(secret, step), code):
+            return step
+    return None
+
+
+def _backup_hash(code):
+    return hashlib.sha256(re.sub(r"[^a-z0-9]", "", code.lower()).encode()).hexdigest()
+
+
+def check_code(user, code):
+    """'app' or 'backup' when the code is right (a backup code is used up), else None."""
+    code = re.sub(r"[\s-]", "", code or "").lower()
+    if not user or not user.get("totp_on"):
+        return None
+    if re.fullmatch(r"\d{6}", code):
+        step = _app_code_ok(user["totp_secret"], code, user.get("totp_step", 0))
+        if step:
+            _update(user["id"], totp_step=step)
+            return "app"
+    elif re.fullmatch(r"[a-z0-9]{10}", code):
+        codes = user.get("backup_codes") or []
+        if _backup_hash(code) in codes:
+            _update(user["id"], backup_codes=[c for c in codes if c != _backup_hash(code)])
+            alert("backup", f"🔑 {user['email']} signed in with a backup code ({len(codes) - 1} left).", user["email"])
+            return "backup"
+    return None
+
+
+def start_two_step(user):
+    """A short-lived ticket for the code step; no session until the code is right."""
+    ticket = secrets.token_urlsafe(24)
+    now = time.time()
+    for k in [k for k, (_, exp) in _pending.items() if exp < now]:
+        _pending.pop(k, None)
+    _pending[_token_key(ticket)] = (user["id"], now + CODE_MINUTES * 60)
+    return ticket
+
+
+def finish_two_step(ticket, code, timezone=None, language=None):
+    key = _token_key(ticket or "")
+    user_id, expires = _pending.get(key, (None, 0))
+    user = get(user_id) if user_id and expires > time.time() else None
+    if not user or user.get("disabled"):
+        _pending.pop(key, None)
+        raise AuthError("the sign-in took too long - enter your e-mail and password again")
+    if _locked(user["email"]):
+        _pending.pop(key, None)
+        raise _lock_error(_locked(user["email"]))
+    if not check_code(user, code):
+        _wrong(user["email"], "two-step codes")
+        if _locked(user["email"]):
+            _pending.pop(key, None)
+            raise _lock_error(LOCK_MINUTES)
+        raise AuthError("wrong code - type the 6 digits your authenticator app shows now, or a backup code")
+    _pending.pop(key, None)
+    _signed_in(user, timezone, language)
+    return get(user["id"])
+
+
+def two_step_begin(user_id):
+    """A new secret, not active until a code from it is typed (two_step_enable)."""
+    import urllib.parse
+    user = get(user_id)
+    secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+    _update(user_id, totp_pending=secret)
+    q = urllib.parse.quote
+    uri = (f"otpauth://totp/{q(ISSUER + ':' + user['email'], safe='')}?secret={secret}"
+           f"&issuer={q(ISSUER, safe='')}&algorithm=SHA1&digits=6&period=30")
+    return {"secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)), "uri": uri}
+
+
+def _new_backup_codes(user_id):
+    codes = ["".join(secrets.choice("abcdefghjkmnpqrstuvwxyz23456789") for _ in range(10)) for _ in range(8)]
+    _update(user_id, backup_codes=[_backup_hash(c) for c in codes])
+    return [f"{c[:5]}-{c[5:]}" for c in codes]
+
+
+def two_step_enable(user_id, code):
+    """Turns it on when the code from the new secret is right; returns 8 backup codes (shown once)."""
+    secret = get(user_id).get("totp_pending")
+    code = re.sub(r"\s", "", code or "")
+    step = _app_code_ok(secret, code) if secret and re.fullmatch(r"\d{6}", code) else None
+    if not step:
+        raise AuthError("this code does not match - check that the phone's clock is right and type the code shown now")
+    _update(user_id, totp_on=True, totp_secret=secret, totp_step=step, totp_pending=None, totp_since=_now())
+    return _new_backup_codes(user_id)
+
+
+def two_step_disable(user_id, password, code):
+    user = get(user_id)
+    if two_step_required(user):
+        raise AuthError("two-step sign-in is required for the super admin and the Studio owner")
+    if not _matches(password or "", user["password"]) or not check_code(user, code):
+        raise AuthError("the password or the code is wrong")
+    _update(user_id, totp_on=False, totp_secret=None, totp_step=0, totp_pending=None, backup_codes=[])
+    alert("2fa-off", f"🔓 {user['email']} turned two-step sign-in off.", user["email"])
+
+
+def two_step_reset(user_id):
+    """Off and forgotten, every device signed out (an admin for someone who lost the phone, or the
+    reset-2fa command). The owner / super admin is asked to set it up again at the next sign-in."""
+    _update(user_id, totp_on=False, totp_secret=None, totp_step=0, totp_pending=None, backup_codes=[])
+    end_sessions(user_id)
+
+
+def new_backup_codes(user_id, code):
+    if not check_code(get(user_id), code):
+        raise AuthError("wrong code")
+    return _new_backup_codes(user_id)
+
+
+# ------------------------------------------------------------------ password reset by e-mail
+
+def _resets():
+    data = space._read(RESETS, {}) or {}
+    now = time.time()
+    return {k: v for k, v in data.items() if v.get("created", 0) > now - 3600 or v.get("expires", 0) > now}
+
+
+def request_reset(email):
+    """(user, token) for a reset e-mail, or (None, None) when there is nothing to send: no such account,
+    a blocked one, or RESETS_PER_HOUR already sent. The caller answers the same in every case, so the
+    page never tells who has an account."""
+    email = (email or "").strip().lower()
+    user = next((u for u in _users() if u["email"] == email), None)
+    if not user or user.get("disabled"):
+        return None, None
+    with _lock:
+        data = _resets()
+        mine = [k for k, v in data.items() if v["user"] == user["id"]]
+        if len(mine) >= RESETS_PER_HOUR:
+            return None, None
+        for k in mine:                         # a new link makes the older ones stop working
+            data[k]["used"] = True
+        token = secrets.token_urlsafe(32)
+        data[_token_key(token)] = {"user": user["id"], "created": time.time(),
+                                   "expires": time.time() + RESET_MINUTES * 60, "used": False}
+        space._write(RESETS, data)
+    return user, token
+
+
+def _reset_user(token):
+    entry = _resets().get(_token_key(token or ""))
+    if not entry or entry["used"] or entry["expires"] < time.time():
+        return None
+    user = get(entry["user"])
+    return user if user and not user.get("disabled") else None
+
+
+def reset_info(token):
+    """The e-mail the link is for, partly hidden (j***@gmail.com), or None when the link does not work."""
+    user = _reset_user(token)
+    if not user:
+        return None
+    name, _, domain = user["email"].partition("@")
+    return {"email": f"{name[:1]}***@{domain}", "two_step": bool(user.get("totp_on"))}
+
+
+def finish_reset(token, new):
+    user = _reset_user(token)
+    if not user:
+        raise AuthError("this link has expired or was already used - ask for a new one")
+    _check_password(new, user["email"])
+    with _lock:
+        data = _resets()
+        for v in data.values():
+            if v["user"] == user["id"]:
+                v["used"] = True
+        space._write(RESETS, data)
+    _update(user["id"], password=_hash(new))
+    _failures.pop(user["email"], None)          # the reset unlocks the account
+    end_sessions(user["id"])                    # every device signs in again
     return user
 
 
@@ -184,14 +434,14 @@ def change_password(user_id, old, new):
     user = get(user_id)
     if not user or not _matches(old or "", user["password"]):
         raise AuthError("the current password is wrong")
-    _check_password(new)
+    _check_password(new, user["email"])
     _update(user_id, password=_hash(new))
     end_sessions(user_id, keep=None)
 
 
 def set_password(user_id, new):
-    """The owner resets someone's password (until e-mail resets exist)."""
-    _check_password(new)
+    """An admin sets someone's password (people can also reset their own by e-mail)."""
+    _check_password(new, (get(user_id) or {}).get("email", ""))
     _update(user_id, password=_hash(new))
     end_sessions(user_id)
 
@@ -442,3 +692,17 @@ def may_open(user, cid):
         return space.get(cid).get("owner") == user["id"]
     except space.SpaceError:
         return False
+
+
+# ------------------------------------------------------------------ command line
+
+if __name__ == "__main__":
+    # docker compose exec worker python auth.py reset-2fa EMAIL   - lost phone and backup codes
+    if len(sys.argv) == 3 and sys.argv[1] == "reset-2fa":
+        found = next((u for u in _users() if u["email"] == sys.argv[2].strip().lower()), None)
+        if not found:
+            sys.exit("no account with this e-mail")
+        two_step_reset(found["id"])
+        print(f"two-step sign-in is off for {found['email']}: it is set up again at the next sign-in")
+    else:
+        sys.exit("usage: python auth.py reset-2fa EMAIL")
