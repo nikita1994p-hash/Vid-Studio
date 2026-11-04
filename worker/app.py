@@ -614,11 +614,17 @@ def reset_request(req: ResetRequest, request: Request):
         if pipeline.SANDBOX:
             print(f"[sandbox] reset link for {user['email']}: {link}", flush=True)
         try:
-            mail.send(user["email"], "Reset your Vid Studio password",
-                      f"Someone (hopefully you) asked to reset the password of your Vid Studio account.\n\n"
-                      f"Open this link to choose a new password:\n{link}\n\n"
-                      f"It works once, for {auth.RESET_MINUTES} minutes. If you did not ask for it, ignore this "
-                      "e-mail: your password stays the same.\n\n— Vid Studio")
+            mail.send(user["email"], "Password reset request - Vid Studio",
+                      "Hello,\n\n"
+                      "We received a request to reset the password for the Vid Studio account associated with "
+                      "this e-mail address.\n\n"
+                      f"To choose a new password, please open the link below:\n{link}\n\n"
+                      f"For your security, this link can be used only once and expires in {auth.RESET_MINUTES} "
+                      "minutes.\n\n"
+                      "If you did not request a password reset, no action is required: your password will "
+                      "remain unchanged. If you keep receiving these e-mails without asking for them, please "
+                      "reply to this message and our support team will look into it.\n\n"
+                      "Best regards,\nVid Studio Support Team")
         except mail.MailError as e:
             print(f"[warn] reset e-mail not sent: {e}", flush=True)
             if not pipeline.SANDBOX:
@@ -643,10 +649,16 @@ def reset_finish(req: ResetFinishRequest, request: Request):
     except Exception as e:
         _fail(e)
     try:
-        mail.send(user["email"], "Your Vid Studio password was changed",
-                  "The password of your Vid Studio account was just changed with a reset link, and every device "
-                  "was signed out.\n\nIf this was not you, reset the password again at once and tell the Studio "
-                  "admin.\n\n— Vid Studio")
+        when = time.strftime("%d %B %Y, %H:%M UTC", time.gmtime())
+        mail.send(user["email"], "Your password has been changed - Vid Studio",
+                  "Hello,\n\n"
+                  f"This is a confirmation that the password for your Vid Studio account was changed on {when} "
+                  "using a password reset link. For your security, you have been signed out on all devices.\n\n"
+                  "If you made this change, no further action is required.\n\n"
+                  "If you did not change your password, please reset it immediately with \"Forgot password?\" "
+                  "on the sign-in page and reply to this message so our support team can secure your "
+                  "account.\n\n"
+                  "Best regards,\nVid Studio Support Team")
     except mail.MailError as e:
         print(f"[warn] password-changed e-mail not sent: {e}", flush=True)
     notify.security("reset", f"🔁 {user['email']} reset the password with an e-mail link "

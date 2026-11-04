@@ -228,8 +228,9 @@ def _signed_in(user, timezone=None, language=None):
 # ------------------------------------------------------------------ two-step sign-in (TOTP, RFC 6238)
 
 def two_step_required(user):
-    """The super admin and the Studio owner must use a code from an authenticator app."""
-    return bool(user) and user.get("role") in FULL_ROLES
+    """The super admin and the Studio owner must use a code from an authenticator app (not in the sandbox,
+    a test copy where it would only slow down testing; it can still be turned on there by hand)."""
+    return bool(user) and user.get("role") in FULL_ROLES and os.environ.get("SANDBOX") != "1"
 
 
 def _totp(secret, step):

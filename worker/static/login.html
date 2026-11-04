@@ -83,7 +83,7 @@
 
     document.getElementById("forgot-link").addEventListener("click", (e) => {
       e.preventDefault();
-      setMode("forgot", "Type the e-mail of your account. If it has one, a link to set a new password arrives in a minute.");
+      setMode("forgot", "Enter the e-mail address associated with your account and we will send you a link to reset your password.");
     });
     document.getElementById("back-link").addEventListener("click", (e) => { e.preventDefault(); ticket = ""; setMode("login"); });
 
@@ -125,8 +125,8 @@
     if (RESET) {
       fetch(`/api/auth/reset/${encodeURIComponent(RESET)}`).then(async (r) => {
         const d = await r.json().catch(() => ({}));
-        if (r.ok) setMode("reset", `Choose a new password for ${d.email}. Every device will be signed out.`);
-        else { setMode("forgot"); const b = document.getElementById("auth-error"); b.textContent = d.detail || "This link does not work any more - ask for a new one."; b.hidden = false; }
+        if (r.ok) setMode("reset", `Please choose a new password for ${d.email}. For your security, you will be signed out on all devices.`);
+        else { setMode("forgot"); const b = document.getElementById("auth-error"); b.textContent = "This reset link has expired or has already been used. Please request a new one below."; b.hidden = false; }
       });
     } else {
       fetch("/api/auth/state").then((r) => r.json()).then((s) => {
@@ -152,14 +152,16 @@
       try {
         if (mode === "forgot") {
           const d = await post("/api/auth/reset", { email: form.email.value });
-          ok.textContent = `If ${form.email.value} has an account, the link is on its way. It works once, for ${d.minutes} minutes. `
-            + "No e-mail after a few minutes? Check the spam folder.";
+          ok.textContent = `Thank you. If an account is registered with ${form.email.value}, we have sent an e-mail with `
+            + `instructions to reset your password. For your security, the link can be used only once and expires in ${d.minutes} minutes. `
+            + "If you do not receive the e-mail within a few minutes, please check your spam or junk folder.";
           ok.hidden = false;
         } else if (mode === "reset") {
           if (form.password.value !== form.repeat.value) throw new Error("the two passwords are not the same");
           const d = await post("/api/auth/reset/finish", { token: RESET, password: form.password.value });
           form.password.value = form.repeat.value = "";
-          setMode("login", "Password changed. Sign in with the new one" + (d.two_step ? " and the code from your app." : "."));
+          setMode("login", "Your password has been changed successfully. Please sign in with your new password"
+            + (d.two_step ? " and the code from your authenticator app." : "."));
         } else if (mode === "code") {
           await post("/api/auth/login/code", { ticket, code: form.code.value, ...LOCALE });
           location.href = "/";
