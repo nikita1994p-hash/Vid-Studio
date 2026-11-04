@@ -741,7 +741,8 @@ async function renderSettings() {
           <li>Open the group → its name → <b>Edit</b> → <b>Topics</b> → on → Save.</li>
           <li>Group → <b>Administrators</b> → <b>Add admin</b> → your bot → keep <b>Manage topics</b> on → Save.</li>
           <li>In the group type <code>/start${tg.bot ? esc(tg.bot) : "@your_bot"}</code>, then here press “Find my chat”
-            and “Make topics”. Each topic can be muted on its own.</li></ol></details>
+            and “Make topics”. Each topic can be muted on its own.</li>
+          <li>Made the topics yourself? Before “Make topics” type the same <code>/start</code> command once in each of them: the Studio then uses yours instead of making new ones.</li></ol></details>
       ${tg.topics && tg.topics.length ? `<p class="small">Topics: ${tg.topics.map(esc).join(", ")}</p>` : ""}
       <div class="actions"><input id="tg-token" type="password" autocomplete="off" style="flex:1;min-width:220px"
           placeholder="${tg.has_token ? "token saved — paste a new one to replace it" : "123456789:AA…"}">

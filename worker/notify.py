@@ -69,12 +69,39 @@ def save(bot_token=None, chat_id=None):
     return status()
 
 
+_seen_topics = {}   # group chat id -> {topic key: thread id}, learned from messages typed inside topics
+
+
+def _topic_key(name):
+    """'🎬 Videos' / 'Video' / 'Security alerts' -> the TOPICS key it stands for (or None)."""
+    low = (name or "").lower()
+    for key in TOPICS:
+        if key.rstrip("s") in low:
+            return key
+    return None
+
+
+def _learn_topic(message):
+    """A message inside a topic names its topic (the topic's first service message rides along with it)."""
+    chat = str(message.get("chat", {}).get("id", ""))
+    thread = message.get("message_thread_id")
+    made = message.get("forum_topic_created") or (message.get("reply_to_message") or {}).get("forum_topic_created")
+    if not (chat.startswith("-") and thread and made):
+        return
+    key = _topic_key(made.get("name"))
+    if key:
+        _seen_topics.setdefault(chat, {})[key] = thread
+
+
 def find_chat():
     """The chat of the last message sent to the bot: the creator opens the bot and presses Start."""
     c = _config()
     if not c.get("bot_token"):
         raise PipelineError("save the bot token first")
     updates = _call(c["bot_token"], "getUpdates", {"limit": 20, "timeout": 0})
+    for u in updates:
+        if u.get("message"):
+            _learn_topic(u["message"])
     chats = [u.get("message", {}).get("chat") for u in updates if u.get("message")]
     if not chats and _last_chat.get(c["bot_token"]):   # another channel's poller read it first
         chats = [_last_chat[c["bot_token"]]]
@@ -100,6 +127,8 @@ def setup_topics():
     if not chat.get("is_forum"):
         raise PipelineError("Topics are off in this group: open the group -> Edit -> Topics -> on, then press again")
     topics = c.get("topics") or {}
+    for key, thread in _seen_topics.get(str(c["chat_id"]), {}).items():   # topics the owner made by hand
+        topics.setdefault(key, thread)
     for key, name in TOPICS.items():
         if key not in topics:
             try:
@@ -448,6 +477,7 @@ def poll_loop(pause=4):
                 offsets[key], changed = u["update_id"] + 1, True
                 if u.get("message"):
                     _last_chat[token] = u["message"].get("chat")
+                    _learn_topic(u["message"])
                     try:
                         _command(token, channels, u["message"])
                     except Exception as e:
