@@ -9,3 +9,4 @@ __pycache__/
 backup/
 # the test Studio's data - a copy made by sandbox_sync.py
 data-sandbox/
+tools/guide/guide.html
