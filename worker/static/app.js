@@ -245,7 +245,11 @@ async function renderVideo(id) {
   });
   const ttBox = $("#tiktok-form");
   const ttTick = view.querySelector("input[name=platform][value=tiktok]");
-  ttTick?.addEventListener("change", () => (ttTick.checked ? tiktokForm(ttBox, id) : (ttBox.hidden = true)));
+  ttTick?.addEventListener("change", () => {
+    if (ttTick.checked) return tiktokForm(ttBox, id);
+    ttBox.hidden = true;
+    $("#publish-btn").disabled = false; $("#publish-btn").title = "";   // the TikTok rules no longer apply
+  });
   $("#publish-btn")?.addEventListener("click", async () => {
     const mode = $("input[name=mode]:checked").value;
     const platforms = [...view.querySelectorAll("input[name=platform]:checked")].map((x) => x.value);
@@ -334,7 +338,8 @@ async function renderVideo(id) {
   if (busy || moving || ["queued", "uploading"].includes(status.youtube?.state)) poll(route, 2000);
 }
 
-const SOCIAL_STATE = { queued: "queued", uploading: "uploading…", posted: "posted ✓", error: "failed" };
+const SOCIAL_STATE = { queued: "queued", uploading: "uploading…", posted: "posted ✓", error: "failed",
+  waiting: "waiting for you" };
 
 function publishCard(status, accounts) {
   const social = status.social || {};
@@ -415,13 +420,17 @@ async function tiktokForm(box, id) {
     if (self) {
       self.disabled = paid;
       self.textContent = paid ? "Only me (not available for branded content)" : "Only me";
+      self.title = paid ? "Branded content visibility cannot be set to private." : "";
       if (paid && q("privacy").value === "SELF_ONLY") q("privacy").value = "";
     }
     box.querySelector(".tt-consent").innerHTML = paid
       ? `By posting, you agree to TikTok's <a href="${TT_BRANDED}" target="_blank" rel="noopener">Branded Content Policy</a>
          and <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a>.`
       : `By posting, you agree to TikTok's <a href="${TT_MUSIC}" target="_blank" rel="noopener">Music Usage Confirmation</a>.`;
-    $("#publish-btn").disabled = tooLong;
+    const pick = on && !yours && !paid;   // TikTok: Publish stays off until Your brand or Branded content is ticked
+    const btn = $("#publish-btn");
+    btn.disabled = tooLong || pick;
+    btn.title = pick ? "You need to indicate if your content promotes yourself, a third party, or both." : "";
   };
   ["disclose", "your_brand", "branded", "privacy"].forEach((n) => q(n).addEventListener("change", sync));
   sync();

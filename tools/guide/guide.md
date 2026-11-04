@@ -83,7 +83,7 @@ Vid Studio (раньше называлась VidAuto) сама делает к�
 - **Выбор хука и заголовка**: ролик ждёт после проверенного сценария, озвучка, картинки и монтаж делаются уже для вашего выбора. Работает и для ежедневного ролика (настройка PICK_HOOK), и для каждой A/B-версии.
 - Страница Settings (около 80 настроек), страница Accounts, страница Earnings, очередь тем (~400 бизнесов), проверка фактов, обложки, Telegram, итоги A/B.
 - **Подключены:** YouTube (Rich Goals), TikTok (richgoals, пока только приватно), Instagram (@richgoals2026), страница Facebook (Rich Goals Business AIdeas), Threads (@richgoals2026). X пропущен — API платный.
-- **Автопостинг:** ежедневный ролик публикуется на YouTube, TikTok, Instagram, Facebook и Threads (с 04.11).
+- **Автопостинг:** ежедневный ролик публикуется на YouTube, Instagram, Facebook и Threads (с 04.11). В TikTok — после вашего нажатия: в Telegram приходит ссылка на форму TikTok (правило TikTok, 10.3).
 - Telegram: меню /menu с последним роликом, версиями и кнопками Upload / Publish; кнопки «🌍 Publish now» и «🗑 Delete from YouTube»; ссылка на выбор хука.
 - YouTube: Publish на уже загруженном ролике меняет его доступ, а не загружает копию; ролик, удалённый в YouTube Studio, забывается — следующий Publish загрузит его заново; обложка ставится с повторами до 6 минут, пока YouTube обрабатывает видео.
 - Строка «Follow…» (FOLLOW_CTA) вместо «Subscribe…» на TikTok, Instagram, Threads, Facebook и X.
@@ -288,7 +288,7 @@ Vid Studio (раньше называлась VidAuto) сама делает к�
 ✅ Подключено: richgoals. https://developers.tiktok.com → приложение с Login Kit и Content Posting API (Direct Post), scopes user.info.basic и video.publish, Redirect URI с карточки.
 
 - Публикация из Студии кнопкой Publish открывает форму по правилам TikTok: виден аккаунт, доступ выбирается вручную (без значения по умолчанию), комментарии / дуэты / стежки по умолчанию выключены, отметка рекламного контента, строка согласия.
-- Ежедневный автопостинг публикует в TikTok как приватное («Only me»).
+- Ежедневный запуск сам в TikTok ничего не отправляет: правила TikTok требуют, чтобы автор видел ролик и сам выбрал доступ. На ролике ставится «waiting for you», в Telegram → 🎬 Videos приходит ссылка: открыть ролик → отметить TikTok → заполнить форму → Publish. Кнопка Publish неактивна, пока при «Disclose video content» не выбрано Your brand или Branded content.
 
 ⚠ Пока TikTok не проверит приложение (audit), видео выходят только приватными. Открыть ролик для всех можно вручную в приложении TikTok. Для публичных постов подайте приложение на проверку. Статистика TikTok в Earnings появится после одобрения video.list.
 
@@ -579,6 +579,7 @@ Vid Studio (раньше называлась VidAuto) сама делает к�
 | Instagram: «Object with ID … does not exist» | Вход Instagram потерял доступ к аккаунту — переподключите по разделу 10.4 (User access token) |
 | Instagram / Threads: «API access blocked» | Meta ограничила приложение — пройдите account confirmation в Facebook / Meta и опубликуйте снова |
 | TikTok: пост приватный | Так и должно быть до проверки приложения TikTok (10.3) |
+| TikTok: «waiting for you» | Ролик ждёт вас: открыть → TikTok → форма → Publish (10.3) |
 | X: ошибка 402 | Кончились кредиты X API |
 | YouTube: invalid_grant через неделю | Google → Audience → In production; затем Accounts → YouTube → Switch account |
 | YouTube: «cover not set» | Подтвердите канал по телефону (youtube.com/verify) или загрузите обложку в YouTube Studio |

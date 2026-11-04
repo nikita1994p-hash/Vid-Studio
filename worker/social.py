@@ -772,11 +772,8 @@ def _post_tiktok(acct, job_id, video, result, mode, opts=None):
                      "disable_stitch": not opts.get("stitch") or bool(info.get("stitch_disabled")),
                      "brand_organic_toggle": bool(opts.get("disclose") and opts.get("your_brand")),
                      "brand_content_toggle": bool(opts.get("disclose") and opts.get("branded"))}
-    else:      # autopilot / n8n: no form, so the safest level
-        privacy = "PUBLIC_TO_EVERYONE" if mode == "public" and "PUBLIC_TO_EVERYONE" in allowed else (
-            "SELF_ONLY" if "SELF_ONLY" in allowed else allowed[0])
-        post_info = {"title": _caption(result, 2200),
-                     "disable_duet": False, "disable_comment": False, "disable_stitch": False}
+    else:      # never: post() sends nothing to TikTok without the creator's form
+        raise SocialError("TikTok posts only from the Studio's TikTok form")
     longest = info.get("max_video_post_duration_sec")
     if longest and (result.get("seconds") or 0) > longest:
         raise SocialError(f"TikTok takes videos up to {longest} s from this account; this one is {result['seconds']:.0f} s")
@@ -856,6 +853,16 @@ def post(platform, job_id, mode="auto", opts=None):
         _mark(job_id, platform, state="error", mode=mode, error=str(e)[:500])
         raise
     who = (acct.get("profile") or {}).get("name")
+    if platform == "tiktok" and not opts:
+        # TikTok's rules: nothing is sent before the creator sees the video and makes their own choices
+        # (privacy, interactions, disclosure) in the Studio's TikTok form, so the daily run only asks
+        _mark(job_id, platform, state="waiting", mode=mode, account=who,
+              note="TikTok waits for you: open the video, tick TikTok, fill in its form, Publish")
+        notify.send("posted", f"🎵 TikTok ({who or 'account'}): “{data['result'].get('title')}” is ready. "
+                              f"TikTok posts only after you choose who can view it: open the video, tick TikTok, "
+                              f"fill in its form and press Publish\n{notify.link(job_id)}")
+        return {"platform": platform, "name": p["name"], "url": None, "id": None,
+                "note": "waiting for the creator's choices in the Studio"}
     if platform == "youtube" and (data["status"].get("youtube") or {}).get("video_id"):
         # already on YouTube: change its privacy instead of uploading a duplicate
         url = youtube_set_mode(job_id, mode)
