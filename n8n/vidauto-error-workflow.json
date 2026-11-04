@@ -8,7 +8,10 @@
       "name": "Ошибка в сценарии",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
@@ -17,13 +20,27 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json) }}",
-        "options": { "timeout": 30000 }
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-token",
+              "value": "={{ $env.INTERNAL_TOKEN }}"
+            }
+          ]
+        }
       },
       "id": "6f1d2a40-0b1e-4c55-9a51-1a2b3c4d5e02",
       "name": "В Telegram через Студию",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [260, 0]
+      "position": [
+        260,
+        0
+      ]
     },
     {
       "parameters": {
@@ -35,13 +52,28 @@
       "name": "Подсказка",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [0, -240]
+      "position": [
+        0,
+        -240
+      ]
     }
   ],
   "connections": {
-    "Ошибка в сценарии": { "main": [[{ "node": "В Telegram через Студию", "type": "main", "index": 0 }]] }
+    "Ошибка в сценарии": {
+      "main": [
+        [
+          {
+            "node": "В Telegram через Студию",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" },
+  "settings": {
+    "executionOrder": "v1"
+  },
   "pinData": {},
   "active": false
 }

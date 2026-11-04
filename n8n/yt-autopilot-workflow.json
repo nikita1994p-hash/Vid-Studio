@@ -41,6 +41,15 @@
         "jsonBody": "{}",
         "options": {
           "timeout": 3600000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-token",
+              "value": "={{ $env.INTERNAL_TOKEN }}"
+            }
+          ]
         }
       },
       "id": "a3",
@@ -55,7 +64,16 @@
     {
       "parameters": {
         "url": "http://worker:8000/social/defaults",
-        "options": {}
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-token",
+              "value": "={{ $env.INTERNAL_TOKEN }}"
+            }
+          ]
+        }
       },
       "id": "a4",
       "name": "Куда постить",
@@ -104,6 +122,15 @@
         "jsonBody": "={{ JSON.stringify({ job_id: $json.job_id, mode: $json.mode }) }}",
         "options": {
           "timeout": 1800000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-token",
+              "value": "={{ $env.INTERNAL_TOKEN }}"
+            }
+          ]
         }
       },
       "id": "a7",
