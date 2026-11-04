@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sign in · Vid Studio</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23ff375f'/%3E%3Cstop offset='1' stop-color='%23ff9f0a'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M16 8.6c.7 0 1.3.4 1.7 1l6 10.4c.8 1.3-.2 3-1.7 3H10c-1.5 0-2.5-1.7-1.7-3l6-10.4c.4-.6 1-1 1.7-1z' fill='white'/%3E%3C/svg%3E">
-  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="auth-page">
@@ -30,11 +29,12 @@
         <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" placeholder="123 456"
           style="font-size:22px;letter-spacing:4px;text-align:center"></label>
       <div id="register-only" hidden>
+        <label class="check"><input type="checkbox" name="adult">
+          <span>I am 18 or older and agree to the
+          <a href="https://nikita1994p-hash.github.io/Vid-Studio/terms.html" target="_blank" rel="noopener">Terms</a> and the
+          <a href="https://nikita1994p-hash.github.io/Vid-Studio/privacy.html" target="_blank" rel="noopener">Privacy Policy</a></span></label>
         <label class="check"><input type="checkbox" name="marketing">
           Send me news, tips and offers about Vid Studio by e-mail (optional, unsubscribe any time)</label>
-        <p class="muted small">By creating an account you agree to the
-          <a href="https://nikita1994p-hash.github.io/Vid-Studio/terms.html" target="_blank" rel="noopener">Terms</a> and the
-          <a href="https://nikita1994p-hash.github.io/Vid-Studio/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</p>
       </div>
       <div class="error-box" id="auth-error" hidden></div>
       <div class="ok-box" id="auth-ok" hidden></div>
@@ -71,6 +71,7 @@
       form.password.required = ["login", "register", "reset"].includes(m);
       form.repeat.required = m === "reset";
       form.code.required = m === "code";
+      form.adult.required = m === "register";   // the browser stops the form until it is ticked
       document.getElementById("auth-submit").textContent = TITLE[m];
       form.password.autocomplete = m === "login" ? "current-password" : "new-password";
       const h = document.getElementById("mode-hint");
@@ -167,7 +168,7 @@
           location.href = "/";
         } else {
           const body = { email: form.email.value, password: form.password.value, ...LOCALE };
-          if (mode === "register") Object.assign(body, { marketing: form.marketing.checked, source: SOURCE, invite: inviteOk ? INVITE : null });
+          if (mode === "register") Object.assign(body, { adult: form.adult.checked, marketing: form.marketing.checked, source: SOURCE, invite: inviteOk ? INVITE : null });
           const d = await post(`/api/auth/${mode}`, body);
           if (d.two_step) {
             ticket = d.ticket;

@@ -9,6 +9,7 @@
 import datetime
 import hmac
 import json
+import mimetypes
 import secrets
 import socket
 import threading
@@ -35,6 +36,8 @@ import plans
 import social
 import space
 import topics
+
+mimetypes.add_type("font/woff2", ".woff2")   # the self-hosted Inter font (static/fonts)
 
 app = FastAPI(title="Vid Studio worker", docs_url=None, redoc_url=None, openapi_url=None)   # no public API map
 _busy = threading.Lock()
@@ -209,6 +212,7 @@ class MetaRequest(BaseModel):
 class SignUpRequest(BaseModel):
     email: str
     password: str
+    adult: bool = False                 # the required '18 or older, agree to the Terms' tick box
     marketing: bool = False             # the separate 'news and offers' tick box, off by default
     invite: str | None = None           # an invite link's code: the account starts with that plan
     source: dict | None = None          # ?ref= / utm_* of the sign-up link and the referring site
@@ -386,7 +390,7 @@ def _inline_hashes():
 def _security_headers():
     csp = ("default-src 'self'; "
            f"script-src 'self' {_inline_hashes()}; "
-           "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; "
+           "style-src 'self' 'unsafe-inline'; font-src 'self'; "   # fonts are served by the Studio, never Google's servers
            "img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self'; "
            "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
     headers = {"Content-Security-Policy": csp, "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff",
@@ -567,7 +571,7 @@ def register(req: SignUpRequest, response: Response, request: Request):
     _throttle(request, "sign-up", 10, 3600)
     try:
         user = auth.register(req.email, req.password, req.marketing, req.source, req.timezone, req.language,
-                             (req.invite or "").strip() or None)
+                             (req.invite or "").strip() or None, adult=req.adult)
     except Exception as e:
         _fail(e)
     notify.new_account(user, auth.source_label(user))

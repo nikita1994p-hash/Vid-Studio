@@ -150,11 +150,14 @@ def has_users():
     return bool(_users())
 
 
-def register(email, password, marketing=False, source=None, timezone=None, language=None, invite=None):
+def register(email, password, marketing=False, source=None, timezone=None, language=None, invite=None, adult=False):
     """A new account. The very first one is the owner and takes over the channels made before
     accounts existed. marketing: the separate, optional 'news and offers' tick box.
     source: where they came from (?ref= / utm_* of the sign-up link, the referring site).
-    invite: an invite code - the account starts with the plan the invite gives; without one it has no plan."""
+    invite: an invite code - the account starts with the plan the invite gives; without one it has no plan.
+    adult: the required 'I am 18 or older and agree to the Terms' tick box (the Terms say 18+)."""
+    if not adult:
+        raise AuthError("please confirm that you are 18 or older and agree to the Terms and the Privacy Policy")
     email = _email(email)
     _check_password(password, email)
     with _lock:
@@ -165,6 +168,7 @@ def register(email, password, marketing=False, source=None, timezone=None, langu
         user = {"id": secrets.token_hex(8), "email": email, "password": _hash(password),
                 "role": "superadmin" if email in SUPERADMINS else "owner" if not users else "user",
                 "created": _now(), "last_login": None,
+                "adult_confirmed_at": _now(),   # when they ticked '18 or older, agree to the Terms'
                 "marketing": bool(marketing), "marketing_at": _now() if marketing else None,
                 "disabled": False, "plan": plan, "trial_until": plans.trial_until() if plan == "trial" else None,
                 "invite": invite if plan != "none" else None,
