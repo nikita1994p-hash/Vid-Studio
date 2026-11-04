@@ -10,34 +10,16 @@
 <main>
   <p><a href="./">← Vid Studio</a></p>
   <h1>Privacy Policy</h1>
-  <p class="muted">Last updated: October 29, 2026</p>
+  <p class="muted">Last updated: November 4, 2026</p>
 
-  <p>Vid Studio is a personal tool that runs on its owner's own computer. It makes short videos and,
-    when the owner asks it to, uploads them to the owner's own YouTube channel. It is not a hosted
-    service and has no server that collects data from anyone.</p>
+  <p>Vid Studio is a web studio for creators: it makes short vertical videos and, when you ask it to, publishes them
+    to the accounts you connected yourself. This page explains what data Vid Studio uses, why, where it is kept and
+    how to remove it. Vid Studio runs on its operator's own server and does not sell data.</p>
 
-  <h2>What Google data Vid Studio uses</h2>
-  <p>When the owner connects a YouTube channel, Vid Studio asks Google for permission to:</p>
-  <ul>
-    <li><b>Upload videos</b> (<code>youtube.upload</code>) — to publish the videos the owner made, with their title,
-      description, tags and cover picture;</li>
-    <li><b>Read the channel</b> (<code>youtube.readonly</code>) — to show the channel name and the views and likes of
-      the uploaded videos;</li>
-    <li><b>Manage the uploaded videos</b> (<code>youtube.force-ssl</code>) — only when the owner presses
-      “Publish now” or “Delete from YouTube” for a video Vid Studio uploaded: to make that private video public
-      or to delete it. Vid Studio never changes or deletes any other video;</li>
-    <li><b>Read YouTube Analytics</b> (<code>yt-analytics.readonly</code>, <code>yt-analytics-monetary.readonly</code>) — to show
-      the owner their own views, watch time, subscribers and, once the channel is monetized, revenue.</li>
-  </ul>
-
-  <h2>Where the data is kept</h2>
-  <p>The sign-in tokens and the statistics are stored only in files on the owner's computer. They are
-    never sent to the developer or to any third party, never sold, and never used for advertising.
-    Data is sent only to Google's own APIs, to do what the owner asked.</p>
-
-  <h2>Vid Studio accounts</h2>
-  <p>To sign in to Vid Studio itself you create an account with your e-mail and a password. The password is stored
-    only as a one-way hash. Your e-mail is used to sign you in and to manage your account.</p>
+  <h2>Your Vid Studio account</h2>
+  <p>To use Vid Studio you create an account with your e-mail and a password. The password, the backup codes of
+    two-step sign-in and password reset links are stored only as one-way hashes. Your e-mail is used to sign you in,
+    to send password reset e-mails and to manage your account.</p>
   <p>If, and only if, you tick “Send me news, tips and offers” when you sign up (or later on the My account page),
     your e-mail and the date you agreed are added to the mailing list for news and offers about Vid Studio. The box
     is not ticked by default and is not required to use Vid Studio. You can untick it at any time on the My account
@@ -46,12 +28,56 @@
   <p>So that these e-mails are useful to you, the mailing list also keeps a short summary of how you use Vid Studio:
     the names and topics of your channels, how many videos you made and uploaded, which platforms you connected and
     posted to, and whether the daily autopilot and Telegram alerts are on. It never includes data received from
-    Google or YouTube APIs (views, subscribers, revenue or anything else).</p>
+    Google, YouTube, TikTok, Meta or any other platform's API (views, followers, revenue or anything else).</p>
   <p>When you create an account Vid Studio also notes where you came from (the <code>ref</code> or <code>utm_</code>
     tag of the link you used, and the site that linked to it) and, each time you sign in, your browser's time zone and
-    language. There is no location tracking and no IP lookup. If you unsubscribe you may tell us why; that answer is
-    optional and is only counted in the Studio's own statistics. Your account also shows your plan (free, trial or
-    pro); there are no payments in Vid Studio yet.</p>
+    language. There is no location tracking and no IP lookup. Your account also shows your plan (free, trial or
+    paid).</p>
+
+  <h2>Connected accounts</h2>
+  <p>You connect each platform yourself, by signing in on that platform's own page and approving the permissions it
+    lists. Vid Studio keeps the sign-in tokens it receives and uses them only to do what you ask in the Studio.</p>
+
+  <h3>YouTube (Google)</h3>
+  <ul>
+    <li><b>Upload videos</b> (<code>youtube.upload</code>) — to publish the videos you made, with their title,
+      description, tags and cover picture;</li>
+    <li><b>Read the channel</b> (<code>youtube.readonly</code>) — to show the channel name and the views and likes of
+      the uploaded videos;</li>
+    <li><b>Manage the uploaded videos</b> (<code>youtube.force-ssl</code>) — only when you press
+      “Publish now” or “Delete from YouTube” for a video Vid Studio uploaded: to make that private video public
+      or to delete it. Vid Studio never changes or deletes any other video;</li>
+    <li><b>Read YouTube Analytics</b> (<code>yt-analytics.readonly</code>, <code>yt-analytics-monetary.readonly</code>) — to show
+      you your own views, watch time, subscribers and, once the channel is monetized, revenue.</li>
+  </ul>
+
+  <h3>TikTok</h3>
+  <ul>
+    <li><b>Basic profile</b> (<code>user.info.basic</code>) — your TikTok nickname, username and profile picture, to
+      show you which TikTok account is connected and who a video will be posted as;</li>
+    <li><b>Post videos</b> (<code>video.publish</code>) — to post a video to your TikTok account only after you open
+      it in the Studio, choose who can view it, choose whether comments, Duet and Stitch are allowed, disclose any
+      commercial content and press Publish. Vid Studio never posts to TikTok on its own.</li>
+  </ul>
+  <p>Before showing the post form, Vid Studio asks TikTok which privacy options and interactions your account allows
+    and the longest video you can post; this is used only for that form and is not stored. Vid Studio keeps the
+    publish ID TikTok returns, to show you whether the post went through.</p>
+
+  <h3>Instagram, Facebook Pages and Threads (Meta)</h3>
+  <p>Your account or Page name and picture, to show what is connected; permission to publish the videos you choose;
+    and, for Instagram and Threads, the views and likes of the posts Vid Studio published, to show them to you.</p>
+
+  <h2>Services Vid Studio uses to make videos</h2>
+  <p>To make a video, its topic and script are sent to Google Gemini (writing the script), Microsoft or Google
+    text-to-speech (the voice) and Cloudflare Workers AI (pictures). Only the video's topic and text are sent — never
+    your e-mail, password or any data received from a platform. Alerts you turn on are sent to your own Telegram chat,
+    and account e-mails are sent through Gmail.</p>
+
+  <h2>Where the data is kept and who sees it</h2>
+  <p>Accounts, sign-in tokens, videos and statistics are stored only on Vid Studio's own server. Data received from
+    platforms is used only to provide the features described above, is shown only to you and to the Studio's admins
+    who manage your account, is never sold, never used for advertising and never shared with third parties, except
+    when the law requires it.</p>
 
   <h2>Limited Use</h2>
   <p>Vid Studio's use and transfer of information received from Google APIs adheres to the
@@ -60,13 +86,27 @@
     <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a> and the
     <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.</p>
 
-  <h2>How to remove access</h2>
-  <p>Press <b>Log out</b> on the Accounts page of Vid Studio to delete the stored tokens, and revoke access at any time at
-    <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
-    Deleting the Vid Studio folder deletes all data it stored.</p>
+  <h2>How to remove access and delete your data</h2>
+  <ul>
+    <li>Press <b>Log out</b> next to a platform on the Accounts page of Vid Studio: its stored tokens are deleted at
+      once.</li>
+    <li>You can also revoke access on the platform itself:
+      <a href="https://myaccount.google.com/permissions">Google</a>,
+      TikTok (Settings and privacy → Security and permissions → Apps and services permissions),
+      Instagram, Facebook or Threads (Settings → Apps and websites).</li>
+    <li>To delete your Vid Studio account and everything stored for it, write to
+      <a href="mailto:vidstudio.support@gmail.com">vidstudio.support@gmail.com</a> from your account's e-mail. It is
+      deleted within 30 days.</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>Vid Studio is not meant for anyone under 18.</p>
+
+  <h2>Changes</h2>
+  <p>When this policy changes, the date at the top changes too.</p>
 
   <h2>Contact</h2>
-  <p><a href="mailto:nikita1994p@gmail.com">nikita1994p@gmail.com</a></p>
+  <p><a href="mailto:vidstudio.support@gmail.com">vidstudio.support@gmail.com</a></p>
 </main>
 </body>
 </html>
