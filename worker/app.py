@@ -286,6 +286,78 @@ def _from_public_proxy(request):
     return request.client.host in ips
 
 
+def _client_ip(request):
+    """The visitor's address: behind the public tunnel it is the last X-Forwarded-For entry (the one the
+    tunnel added; earlier ones could be made up by the visitor)."""
+    if _from_public_proxy(request):
+        forwarded = [x.strip() for x in request.headers.get("x-forwarded-for", "").split(",") if x.strip()]
+        if forwarded:
+            return forwarded[-1]
+    return request.client.host if request.client else "?"
+
+
+_hits = {}   # (what, address) -> recent request times
+_hits_lock = threading.Lock()
+
+
+def _throttle(request, what, limit, seconds):
+    """At most `limit` requests per `seconds` from one address, so bots cannot guess passwords or mass-sign-up."""
+    key, now = (what, _client_ip(request)), time.time()
+    with _hits_lock:
+        recent = [t for t in _hits.get(key, []) if now - t < seconds]
+        if len(recent) >= limit:
+            raise HTTPException(429, "too many attempts from your network - wait a few minutes and try again")
+        _hits[key] = recent + [now]
+        if len(_hits) > 10000:   # forget addresses that went quiet
+            for k in [k for k, v in _hits.items() if now - v[-1] > 3600]:
+                _hits.pop(k, None)
+
+
+# what an upload may be: its first bytes, not just its name, and its size
+UPLOADS = {"video": ((b"ftyp", 4), (b"\x1a\x45\xdf\xa3", 0)),
+           "image": ((b"\x89PNG", 0), (b"\xff\xd8\xff", 0), (b"WEBP", 8))}
+UPLOAD_MB = {"video": 500, "image": 20}
+
+
+def _check_upload(file, kind):
+    f = file.file
+    f.seek(0, 2)
+    size = f.tell()
+    f.seek(0)
+    head = f.read(16)
+    f.seek(0)
+    if size > UPLOAD_MB[kind] * 1024 * 1024:
+        raise HTTPException(413, f"the file is larger than {UPLOAD_MB[kind]} MB")
+    if not any(head[at:at + len(magic)] == magic for magic, at in UPLOADS[kind]):
+        raise HTTPException(400, f"this file is not a {'video (.mp4, .mov, .webm, .mkv)' if kind == 'video' else 'picture (.png, .jpg, .webp)'}")
+
+
+def _inline_hashes():
+    """CSP hashes of the inline scripts in the login and pricing pages, so no other inline script runs."""
+    import base64
+    import hashlib
+    import re
+    out = []
+    for name in ("login.html", "pricing.html"):
+        for body in re.findall(r"<script>(.*?)</script>", (STATIC / name).read_text(encoding="utf-8"), re.S):
+            out.append("'sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode() + "'")
+    return " ".join(out)
+
+
+def _security_headers():
+    csp = ("default-src 'self'; "
+           f"script-src 'self' {_inline_hashes()}; "
+           "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; "
+           "img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self'; "
+           "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+    headers = {"Content-Security-Policy": csp, "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff",
+               "Referrer-Policy": "strict-origin-when-cross-origin",
+               "Permissions-Policy": "camera=(), microphone=(), geolocation=()"}
+    if pipeline.env("PUBLIC_BASE_URL", "").startswith("https://"):
+        headers["Strict-Transport-Security"] = "max-age=31536000"
+    return headers
+
+
 def _job_in(path):
     parts = path.strip("/").split("/")
     if len(parts) >= 3 and parts[:2] == ["api", "jobs"]:
@@ -425,7 +497,8 @@ def auth_state(request: Request):
 
 
 @app.post("/api/auth/register")
-def register(req: SignUpRequest, response: Response):
+def register(req: SignUpRequest, response: Response, request: Request):
+    _throttle(request, "sign-up", 10, 3600)
     try:
         user = auth.register(req.email, req.password, req.marketing, req.source, req.timezone, req.language,
                              (req.invite or "").strip() or None)
@@ -437,7 +510,8 @@ def register(req: SignUpRequest, response: Response):
 
 
 @app.post("/api/auth/login")
-def login(req: SignInRequest, response: Response):
+def login(req: SignInRequest, response: Response, request: Request):
+    _throttle(request, "sign-in", 20, 600)
     try:
         user = auth.authenticate(req.email, req.password, req.timezone, req.language)
     except Exception as e:
@@ -770,11 +844,16 @@ def index():
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+SECURITY_HEADERS = _security_headers()
+
+
 @app.middleware("http")
 async def revalidate_dashboard(request, call_next):
     """Make the browser re-check dashboard files on every load (cheap: ETag answers 304), so an
-    update never leaves an old style.css or app.js running."""
+    update never leaves an old style.css or app.js running. Every answer carries the security headers."""
     response = await call_next(request)
+    for k, v in SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
     if request.url.path == "/" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
     return response
@@ -920,6 +999,7 @@ def remove_job(job_id: str):
 @app.post("/api/upload")
 def upload(file: UploadFile = File(...), title: str = Form(...), description: str = Form(""),
            tags: str = Form("")):
+    _check_upload(file, "video")
     try:
         return pipeline.create_upload(file.file, file.filename, title, description, tags)
     except Exception as e:
@@ -928,6 +1008,7 @@ def upload(file: UploadFile = File(...), title: str = Form(...), description: st
 
 @app.post("/api/jobs/{job_id}/scenes/{idx}/image")
 def scene_image(job_id: str, idx: int, file: UploadFile = File(...)):
+    _check_upload(file, "image")
     try:
         return pipeline.replace_scene_image(job_id, idx, file.file, file.filename)
     except Exception as e:

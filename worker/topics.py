@@ -40,6 +40,8 @@ def add(lines, top=False):
     for line in lines:
         # drop list markers like "12.", "3)", "- ", "• " in front; keep the name itself intact
         t = re.sub(r"^(?:[-•*]+\s*|\d+\s*[.)]\s*)+", "", " ".join(str(line).split())).strip()[:200]
+        if pipeline.INJECTION.search(t):   # an order to the AI hidden in a topic list is not a topic
+            continue
         if t and _key(t) not in seen:
             seen.add(_key(t))
             new.append({"id": uuid.uuid4().hex[:8], "topic": t, "state": "todo", "added": pipeline._now(),
@@ -80,7 +82,7 @@ def _review(names):
     for model in pipeline.text_models():
         try:
             text = pipeline._hard_timeout(lambda: pipeline._output(client.interactions.create(
-                model=model, input=prompt, timeout=90,
+                model=model, input=prompt, timeout=90, system_instruction=pipeline.GUARD,
                 response_format={"type": "text", "mime_type": "application/json",
                                  "schema": TopicReview.model_json_schema()}), "text"), 100)
             return {v.n: v for v in TopicReview.model_validate_json(text).topics}
@@ -146,7 +148,7 @@ def suggest(count=30):
     for model in pipeline.text_models():
         try:
             text = pipeline._hard_timeout(lambda: pipeline._output(client.interactions.create(
-                model=model, input=prompt, timeout=60,
+                model=model, input=prompt, timeout=60, system_instruction=pipeline.GUARD,
                 response_format={"type": "text", "mime_type": "application/json"}), "text"), 70)
             ideas = [str(t) for t in json.loads(text).get("topics") or [] if str(t).strip()]
             break
