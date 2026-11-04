@@ -293,11 +293,15 @@ Vid Studio (раньше называлась VidAuto) сама делает к�
 
 ## 10.4. Instagram
 
-✅ Подключено: @richgoals2026 (Business-аккаунт, связан со страницей Facebook).
+✅ Подключено (04.11): @richgoals2026, связан со страницей Rich Goals Business AIdeas. Студия публикует токеном этой страницы.
 
-1. https://developers.facebook.com/apps → приложение типа Business → use case Instagram API → API setup with Unified login.
-2. Создайте configuration (Facebook Login for Business), зарегистрируйте Redirect URI с карточки Instagram.
-3. В Студию: App ID и App secret (App settings → Basic) и Configuration ID. Поле Instagram account ID — по желанию, если Студия не находит аккаунт сама.
+1. https://developers.facebook.com/apps/3931677036973173/dashboard/ → **Use cases** → **Instagram API** → **Customize** → **API setup with Facebook login** → **Add required content permissions**.
+2. Меню слева → **Facebook Login for Business → Configurations → Create configuration**: Name `Vid Studio Instagram user`, General, **User access token** (не System-user), Assets — Pages и Instagram accounts, права `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement`, `business_management` → Create → скопируйте Configuration ID.
+3. Студия → Accounts → Instagram → App keys: App ID и App secret (App settings → Basic), новый Configuration ID → Save → ⇄ Switch account → выберите страницу и @richgoals2026.
+
+⚠ Не используйте конфигурацию с System-user access token: 04.11 такой вход потерял доступ к аккаунту после того, как Instagram привязали к новой странице Facebook («Object with ID … does not exist»).
+
+⚠ Сам токен страницы бессрочный, но доступ Meta к данным действует 90 дней (сейчас — примерно до 02.02.2027) и продлевается, когда вы входите заново. Если Instagram или Facebook начнут отвечать ошибкой доступа — нажмите ⇄ Switch account на их карточках.
 
 ⚠ «API access blocked» при публикации — это ограничение Meta на приложение, а не ошибка Студии. Пройдите проверку аккаунта (account confirmation), которую просит Meta, и опубликуйте снова.
 
