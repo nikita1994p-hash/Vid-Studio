@@ -212,7 +212,6 @@ class MetaRequest(BaseModel):
 class SignUpRequest(BaseModel):
     email: str
     password: str
-    adult: bool = False                 # the required '18 or older, agree to the Terms' tick box
     marketing: bool = False             # the separate 'news and offers' tick box, off by default
     invite: str | None = None           # an invite link's code: the account starts with that plan
     source: dict | None = None          # ?ref= / utm_* of the sign-up link and the referring site
@@ -571,7 +570,7 @@ def register(req: SignUpRequest, response: Response, request: Request):
     _throttle(request, "sign-up", 10, 3600)
     try:
         user = auth.register(req.email, req.password, req.marketing, req.source, req.timezone, req.language,
-                             (req.invite or "").strip() or None, adult=req.adult)
+                             (req.invite or "").strip() or None)
     except Exception as e:
         _fail(e)
     notify.new_account(user, auth.source_label(user))

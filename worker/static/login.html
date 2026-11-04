@@ -29,12 +29,11 @@
         <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" placeholder="123 456"
           style="font-size:22px;letter-spacing:4px;text-align:center"></label>
       <div id="register-only" hidden>
-        <label class="check"><input type="checkbox" name="adult">
-          <span>I am 18 or older and agree to the
-          <a href="https://nikita1994p-hash.github.io/Vid-Studio/terms.html" target="_blank" rel="noopener">Terms</a> and the
-          <a href="https://nikita1994p-hash.github.io/Vid-Studio/privacy.html" target="_blank" rel="noopener">Privacy Policy</a></span></label>
         <label class="check"><input type="checkbox" name="marketing">
           Send me news, tips and offers about Vid Studio by e-mail (optional, unsubscribe any time)</label>
+        <p class="muted small">By creating an account you agree to the
+          <a href="https://nikita1994p-hash.github.io/Vid-Studio/terms.html" target="_blank" rel="noopener">Terms</a> and the
+          <a href="https://nikita1994p-hash.github.io/Vid-Studio/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</p>
       </div>
       <div class="error-box" id="auth-error" hidden></div>
       <div class="ok-box" id="auth-ok" hidden></div>
@@ -71,7 +70,6 @@
       form.password.required = ["login", "register", "reset"].includes(m);
       form.repeat.required = m === "reset";
       form.code.required = m === "code";
-      form.adult.required = m === "register";   // the browser stops the form until it is ticked
       document.getElementById("auth-submit").textContent = TITLE[m];
       form.password.autocomplete = m === "login" ? "current-password" : "new-password";
       const h = document.getElementById("mode-hint");
@@ -168,7 +166,7 @@
           location.href = "/";
         } else {
           const body = { email: form.email.value, password: form.password.value, ...LOCALE };
-          if (mode === "register") Object.assign(body, { adult: form.adult.checked, marketing: form.marketing.checked, source: SOURCE, invite: inviteOk ? INVITE : null });
+          if (mode === "register") Object.assign(body, { marketing: form.marketing.checked, source: SOURCE, invite: inviteOk ? INVITE : null });
           const d = await post(`/api/auth/${mode}`, body);
           if (d.two_step) {
             ticket = d.ticket;
