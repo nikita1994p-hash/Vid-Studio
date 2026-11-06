@@ -112,6 +112,8 @@ SETTINGS_SCHEMA = [
     {"key": "SERIES_TITLE_PREFIX", "group": "Content", "label": "Title prefix ({n} = episode)", "type": "text"},
     {"key": "SERIES_TITLE_POSITION", "group": "Content", "label": "Where the episode tag goes in the title", "type": "select",
      "options": ["start", "end"], "default": "start"},
+    {"key": "COMPARE_DAY", "group": "Content", "label": "Weekly comparison episode (this business vs a glamorous one people dream of)", "type": "select",
+     "options": ["off", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], "default": "off"},
     {"key": "END_TEASER", "group": "Content", "label": "Show 'Tomorrow #N: next topic' on the last scene (a reason to follow)", "type": "bool", "default": "false"},
     {"key": "FIRST_COMMENT", "group": "Content", "label": "Post the video's question to viewers as the first YouTube comment (pin it in YouTube Studio)", "type": "bool", "default": "false"},
     {"key": "BODY_SCENES", "group": "Content", "label": "Scenes after the hook", "type": "number", "min": 3, "max": 10, "default": "6"},
@@ -160,6 +162,14 @@ SETTINGS_SCHEMA = [
     {"key": "LABEL_COLOR", "group": "Picture", "label": "Series badge colour", "type": "color", "default": "#FF0033"},
     {"key": "SHADE", "group": "Picture", "label": "Darken pictures (0-0.7)", "type": "number", "min": 0, "max": 0.7, "step": 0.05, "default": "0.35"},
     {"key": "ZOOM", "group": "Picture", "label": "Camera motion (0 = still, 0.25 = strong)", "type": "number", "min": 0, "max": 0.25, "step": 0.01, "default": "0.12"},
+    {"key": "SHOTS_PER_SCENE", "group": "Picture", "label": "Pictures per scene (2 = a second, different shot halfway: more cuts, about twice the FLUX pictures)", "type": "number", "min": 1, "max": 2, "default": "1"},
+    {"key": "HOOK_FRAME", "group": "Picture", "label": "First frame", "type": "select",
+     "options": ["result", "pov", "number", "before-after", "rotate"], "default": "result"},
+    {"key": "POV_SHOTS", "group": "Picture", "label": "Some pictures as a first-person view (the camera is the worker's eyes)", "type": "bool", "default": "false"},
+    {"key": "OVERLAY_STYLE", "group": "Picture", "label": "Key numbers on screen", "type": "select",
+     "options": ["number", "receipt"], "default": "number"},
+    {"key": "COUNT_UP", "group": "Picture", "label": "Money figures count up and grow as they appear", "type": "bool", "default": "false"},
+    {"key": "PIXABAY_SHOTS", "group": "Picture", "label": "Second shot from Pixabay stock video when it has one (needs PIXABAY_API_KEY in .env)", "type": "bool", "default": "false"},
     {"key": "PUNCH_IN", "group": "Picture", "label": "Second shot in long scenes: cut to a closer view halfway (0 = off, 0.3 = much closer)", "type": "number", "min": 0, "max": 0.4, "step": 0.02, "default": "0"},
     {"key": "VISUAL_PROVIDER", "group": "Picture", "label": "Picture source", "type": "select",
      "options": ["auto", "flux", "openverse", "cards", "pexels", "gemini"], "default": "auto"},
@@ -170,6 +180,7 @@ SETTINGS_SCHEMA = [
     # sound
     {"key": "MUSIC_TRACK", "group": "Sound", "label": "Music", "type": "select", "options": [], "default": "auto"},
     {"key": "MUSIC_VOLUME", "group": "Sound", "label": "Music volume (0-0.4)", "type": "number", "min": 0, "max": 0.4, "step": 0.01, "default": "0.12"},
+    {"key": "NUMBER_SFX", "group": "Sound", "label": "Pop under each key number, coin on the profit (0 = off)", "type": "number", "min": 0, "max": 1, "step": 0.05, "default": "0"},
     {"key": "SFX_VOLUME", "group": "Sound", "label": "Whoosh on scene cuts (0 = off)", "type": "number", "min": 0, "max": 1, "step": 0.05, "default": "0.5"},
     # variants
     {"key": "VARIANT_VOICES", "group": "Variants", "label": "Voices that variants rotate through (comma separated)", "type": "text",
@@ -475,6 +486,9 @@ class Scene(BaseModel):
     image_prompt: str = Field(description="English prompt for a vertical illustration of this scene")
     stock_query: str = Field(description="2-4 English words to find real stock footage of this scene, e.g. 'laundromat washing machines'")
     on_screen: str = Field(description="the key fact of this scene as big on-screen text, max 5 words, e.g. '$12,000 to start'")
+    image_prompt_2: str = Field(default="", description=(
+        "English prompt for a SECOND, different shot of the same moment, cut in halfway: a close-up of the "
+        "detail, the work in action or a first-person view - same style, never the same framing"))
 
 
 class Plan(BaseModel):
@@ -483,6 +497,9 @@ class Plan(BaseModel):
     hook_visual: str = Field(description="English prompt for the opening visual under the hook")
     hook_stock_query: str = Field(description="2-4 English words for stock footage under the hook")
     hook_on_screen: str = Field(description="big on-screen text for the hook, max 5 words")
+    hook_visual_before: str = Field(default="", description=(
+        "only for a before/after opening: English prompt for the BEFORE state of the same place, same "
+        "angle as hook_visual (the AFTER); otherwise empty"))
     scenes: list[Scene] = Field(description="the body that follows the hook")
     parts: list[str] = Field(description="empty list when the story fits one Short; otherwise one-sentence "
                                          "outlines of all 2-3 parts, and this plan is part 1")
@@ -687,6 +704,7 @@ def _prompt(topic, history, episode, part=None, script=None):
         "crowds, several people touching or interacting, readable screens, signs, price tags, receipts,",
         "banknotes, mirrors, keyboards and intricate machinery up close. Show a person from behind, at a",
         "distance or as a silhouette; prefer the place, the equipment or the finished result.",
+        *_visual_rules(episode),
         "stock_query: 2-3 plain English nouns for a PHOTO of what is literally visible (e.g. 'laundromat',",
         "'vending machine', 'pressure washer driveway'), never abstract ideas, people's names or brands. on_screen: the one number or fact the viewer must",
         f"remember from that scene, max 5 words. on_screen ALWAYS {N['on_screen_rule']}",
@@ -705,6 +723,7 @@ def _prompt(topic, history, episode, part=None, script=None):
         "in 1-3 plain words. The figure must be one the script really says.",
         "",
     ]
+    lines += _compare_rules()
     try:
         import abtest
         hint = abtest.prompt_hint()
@@ -1489,7 +1508,8 @@ def _encode_args():
             "-r", str(FPS), "-an"]
 
 
-def segment_from_image(img, frames, idx, out, overlay="", loop=False):
+def segment_from_image(img, frames, idx, out, overlay="", loop=False, size=None):
+    w_, h_ = size or (W, H)
     zm = max(0.0, min(0.3, _num("ZOOM", 0.12)))
     z = f"1+{zm}*on/{frames}" if idx % 2 == 0 else f"{1 + zm}-{zm}*on/{frames}"
     # alternate the drift so consecutive scenes do not move the same way
@@ -1505,12 +1525,47 @@ def segment_from_image(img, frames, idx, out, overlay="", loop=False):
         # a second shot halfway: a hard cut to a closer view of the same picture keeps the eye busy
         z = f"({z})*if(lt(on,{frames // 2}),1,{1 + punch})"
     # zoompan cost grows with the source size; 1.4x is smooth enough and ~2x faster than 2x on a laptop CPU
-    sw, sh = int(W * 1.4) // 2 * 2, int(H * 1.4) // 2 * 2
+    sw, sh = int(w_ * 1.4) // 2 * 2, int(h_ * 1.4) // 2 * 2
     vf = (f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={sw}:{sh},"
-          f"zoompan=z='{z}':x='{x}':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps={FPS}"
+          f"zoompan=z='{z}':x='{x}':y='ih/2-(ih/zoom/2)':d={frames}:s={w_}x{h_}:fps={FPS}"
           + (f",{overlay}" if overlay else ""))
     _ffmpeg(["-i", str(img), "-vf", vf, "-frames:v", str(frames), *_encode_args(), out.name],
             cwd=out.parent)
+
+
+def segment_two(job, s, frames, idx, out):
+    """A scene with two shots: one after the other (cut halfway), or BEFORE | AFTER side by side for a
+    split opening. The overlay goes on top of the whole scene, so its numbers do not pop twice."""
+    a, b = job / f"_a_{idx:02}.mp4", job / f"_b_{idx:02}.mp4"
+    overlay = s.get("overlay") or "null"
+    try:
+        if s.get("split"):
+            half = (W // 2 // 2 * 2, H)
+            segment_from_image(s["visual2"], frames, idx, b, size=half)       # before, left
+            segment_from_image(s["visual"], frames, idx + 1, a, size=half)    # after, right
+            tags = []
+            for name, x in (("BEFORE", f"{W // 4}-text_w/2"), ("AFTER", f"{3 * W // 4}-text_w/2")):
+                f = job / f"split_{name.lower()}.txt"
+                f.write_text(name, encoding="utf-8")
+                tags.append(f"drawtext=fontfile={FONT_BOLD}:textfile={f.name}:fontsize=58:fontcolor=white"
+                            f":box=1:boxcolor=black@0.7:boxborderw=14:x={x}:y=1480")
+            graph = (f"[0:v][1:v]hstack=inputs=2,drawbox=x={W // 2 - 3}:y=0:w=6:h=ih:color=white@0.9:t=fill,"
+                     + ",".join(tags) + f",{overlay}[v]")
+            _ffmpeg(["-i", b.name, "-i", a.name, "-filter_complex", graph, "-map", "[v]",
+                     "-frames:v", str(frames), *_encode_args(), out.name], cwd=job)
+            return
+        first = frames // 2
+        segment_from_image(s["visual"], first, idx, a)
+        if s.get("visual2_is_video"):
+            segment_from_video(s["visual2"], frames - first, b)
+        else:
+            segment_from_image(s["visual2"], frames - first, idx + 1, b)
+        _ffmpeg(["-i", a.name, "-i", b.name, "-filter_complex",
+                 f"[0:v][1:v]concat=n=2:v=1:a=0,{overlay}[v]", "-map", "[v]",
+                 "-frames:v", str(frames), *_encode_args(), out.name], cwd=job)
+    finally:
+        a.unlink(missing_ok=True)
+        b.unlink(missing_ok=True)
 
 
 def segment_from_video(clip, frames, out, overlay=""):
@@ -1521,6 +1576,7 @@ def segment_from_video(clip, frames, out, overlay=""):
 
 
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT_MONO = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
 CARD_PALETTES = [("0x0b3d2e", "0x020806"), ("0x14213d", "0x05070d"),
                  ("0x3d2b0b", "0x0a0703"), ("0x2b0b3d", "0x07020d")]
 
@@ -1554,9 +1610,18 @@ def text_overlay(job, idx, text, label, shade=False, force_text=False):
         top = 780 - len(lines) * size * 1.15 / 2
         for k, line in enumerate(lines):
             f = job / f"text_{idx:02}_{k}.txt"
-            f.write_text(line, encoding="utf-8")
+            y = int(top + k * size * 1.15)
+            counted = _count_line(line) if idx > 0 and flag("COUNT_UP", "false") else None
+            if counted:
+                # the figure counts up from 0 and grows a little while it does, then stays a bit bigger
+                f.write_text(counted[0], encoding="utf-8")
+                parts.append(f"drawtext=fontfile={FONT_BOLD}:textfile={f.name}:fontsize='{size}*(1+0.15*min(1,t/0.7))'"
+                             f":fontcolor={colour}:borderw=7:bordercolor=black@0.7:x=(w-text_w)/2"
+                             f":y='{y}-{size}*0.07*min(1,t/0.7)'" + fade)
+                continue
+            f.write_text(line.replace("%", "%%"), encoding="utf-8")
             parts.append(f"drawtext=fontfile={FONT_BOLD}:textfile={f.name}:fontsize={size}:fontcolor={colour}"
-                         f":borderw=7:bordercolor=black@0.7:x=(w-text_w)/2:y={int(top + k * size * 1.15)}"
+                         f":borderw=7:bordercolor=black@0.7:x=(w-text_w)/2:y={y}"
                          + fade)
     if label:
         f = job / f"text_{idx:02}_label.txt"
@@ -1565,6 +1630,127 @@ def text_overlay(job, idx, text, label, shade=False, force_text=False):
                      f":box=1:boxcolor={_hex_ff(env('LABEL_COLOR', '#FF0033'), 'FF0033')}@0.92:boxborderw=18"
                      ":x=(w-text_w)/2:y=290")
     return ",".join(parts)
+
+
+FRAMES = ["result", "before-after", "pov", "number"]
+
+
+def hook_frame(episode):
+    """The opening frame's style: one fixed style, or 'rotate' through them by episode so the A/B
+    stats can show which first frame keeps viewers."""
+    style = env("HOOK_FRAME", "result")
+    return FRAMES[(episode or 0) % len(FRAMES)] if style == "rotate" else style
+
+
+def _visual_rules(episode):
+    rules = []
+    frame = hook_frame(episode)
+    if frame in ("result", "number", "before-after"):
+        rules += ["hook_visual shows the RESULT the hook promises - the finished job, the busy moment of sales, the",
+                  "money moment - never the tool or the empty equipment. It must make sense in half a second."]
+    if frame == "before-after":
+        rules += ["This video opens on a BEFORE / AFTER split screen: hook_visual is the AFTER (finished result) and",
+                  "hook_visual_before is the BEFORE state of the same place, same angle (e.g. a lawn buried in wet",
+                  "leaves -> the same lawn clean, leaves bagged by the curb)."]
+    elif frame == "pov":
+        rules += ["hook_visual is a first-person POV shot at the best moment of the work (the camera is the worker's",
+                  "eyes: e.g. from the driver's seat looking at a line of customers), never close-up hands."]
+    if int(_num("SHOTS_PER_SCENE", 1)) >= 2:
+        rules += ["image_prompt_2: for every scene a SECOND, different shot cut in halfway - a close-up of the",
+                  "detail, the work in action, or a first-person view; never the same framing as image_prompt."]
+    if flag("POV_SHOTS", "false"):
+        rules += ["Make two or three of the pictures a first-person POV shot: the camera is the worker's eyes (from",
+                  "the driver's seat of a pickup looking at the street, looking down at a freshly cleaned driveway).",
+                  "No close-up hands or fingers."]
+    return rules
+
+
+def _compare_rules():
+    day = env("COMPARE_DAY", "off")
+    if day == "off" or dt.date.today().strftime("%a") != day:
+        return []
+    return ["", "COMPARISON EPISODE - this week's comparison: put this business against a glamorous, popular one",
+            "people dream of (a food truck, a coffee shop, a dropshipping store, a clothing brand). The hook sets",
+            "them against each other (formula boring-vs-glamorous), the scenes compare start-up cost, money per",
+            "month and the catch of both, and the payoff says which one wins for an ordinary person and why.",
+            "on_screen texts may show both figures (e.g. 'Truck $80K vs $500'). Same honest, typical figures."]
+
+
+def _count_line(line):
+    """'$3K/MO' -> ('$%{eif:...}K/MO' text for drawtext, final number) when it holds exactly one whole
+    money figure that can count up; None otherwise (ranges, decimals, no figure)."""
+    m = re.fullmatch(r"(.*?\$)(\d{1,3}(?:,\d{3})*|\d+)(K|M)?(.*)", line)
+    if not m or re.search(r"\d", m.group(1) + m.group(4)):
+        return None
+    head, num, unit, tail = m.groups()
+    value = int(num.replace(",", ""))
+    if value < 2:
+        return None
+    esc = lambda x: x.replace("%", "%%")
+    return f"{esc(head)}%{{eif:min({value},{value}*t/0.7):d}}{unit or ''}{esc(tail)}", value
+
+
+def receipt_overlay(job, idx, lines, label, shade=True):
+    """The business 'receipt': every body scene adds its key figure as a line, the newest in colour.
+    lines: the on_screen texts of body scenes 1..idx."""
+    # the receipt's own dark panel carries the text, so the picture itself is darkened only lightly
+    darkness = max(0.0, min(0.9, _num("SHADE", 0.35))) * 0.45
+    parts = [f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{darkness:.2f}:t=fill"] if shade and darkness else []
+    rows = []
+    for text in lines[-6:]:
+        name, _, value = text.partition(":")
+        name, value = (name.strip(), value.strip()) if value else (text.strip(), "")
+        value = value.upper()[:14]
+        # the line holds about 28 monospace characters: the name gets what the value leaves
+        rows.append((name.upper()[:max(8, 27 - len(value))], value))
+    top, step = 620, 78   # below the teaser (y 400-482), above the captions
+    parts.append(f"drawbox=x=70:y={top - 30}:w=940:h={len(rows) * step + 100}:color=black@0.62:t=fill")
+    f = job / f"rcpt_{idx:02}_h.txt"
+    f.write_text("THE MATH", encoding="utf-8")
+    parts.append(f"drawtext=fontfile={FONT_MONO}:textfile={f.name}:fontsize=40:fontcolor=white@0.7"
+                 f":x=110:y={top - 10}")
+    colour = _hex_ff(env("OVERLAY_COLOR", "#FFD54A"), "FFD54A")
+    for k, (name, value) in enumerate(rows):
+        new = k == len(rows) - 1
+        y = top + 60 + k * step
+        fade = ":alpha='min(1,t/0.25)'" if new else ""
+        f = job / f"rcpt_{idx:02}_{k}.txt"
+        f.write_text(name.replace("%", "%%"), encoding="utf-8")
+        parts.append(f"drawtext=fontfile={FONT_MONO}:textfile={f.name}:fontsize=50"
+                     f":fontcolor={colour if new else 'white'}:x=110:y={y}{fade}")
+        if value:
+            f = job / f"rcpt_{idx:02}_{k}v.txt"
+            counted = _count_line(value) if new and flag("COUNT_UP", "false") else None
+            f.write_text(counted[0] if counted else value.replace("%", "%%"), encoding="utf-8")
+            size = "fontsize='52*(1+0.15*min(1,t/0.7))'" if counted else "fontsize=52"
+            parts.append(f"drawtext=fontfile={FONT_MONO}:textfile={f.name}:{size}"
+                         f":fontcolor={colour if new else 'white'}:x=970-text_w:y={y}{fade}")
+    if label:
+        f = job / f"text_{idx:02}_label.txt"
+        f.write_text(label, encoding="utf-8")
+        parts.append(f"drawtext=fontfile={FONT_BOLD}:textfile={f.name}:fontsize=52:fontcolor=white"
+                     f":box=1:boxcolor={_hex_ff(env('LABEL_COLOR', '#FF0033'), 'FF0033')}@0.92:boxborderw=18"
+                     ":x=(w-text_w)/2:y=290")
+    return ",".join(parts)
+
+
+def scene_overlays(job, items, label):
+    """The overlay of every scene from its on-screen text, the receipt so far and the teaser.
+    items: dicts with on_screen, loop, card, teaser (scenes_in or scenes.json scenes)."""
+    receipt = env("OVERLAY_STYLE", "number") == "receipt"
+    out, ledger = [], []
+    for i, it in enumerate(items):
+        if it.get("card"):
+            out.append("")
+            continue
+        if i > 0 and not it.get("loop"):
+            ledger.append(it.get("on_screen") or "")
+        if receipt and i > 0 and not it.get("loop"):
+            base = receipt_overlay(job, i, [x for x in ledger if x], label)
+        else:
+            base = text_overlay(job, i, it.get("on_screen") or "", label, shade=True)
+        out.append(",".join(x for x in (base, teaser_overlay(job, it.get("teaser"))) if x))
+    return out
 
 
 def teaser_overlay(job, text):
@@ -1617,21 +1803,42 @@ def visual_provider():
     return p
 
 
+SCHNELL = "@cf/black-forest-labs/flux-1-schnell"
+
+
 def flux_image(prompt, path):
-    """Free AI picture: FLUX.1 schnell (Apache 2.0) on Cloudflare Workers AI, 10k neurons/day.
-    Returns a square JPEG; the renderer crops it to 9:16."""
+    """Free AI picture on Cloudflare Workers AI (10k neurons a day). FLUX_MODEL = FLUX.1 schnell (square,
+    cropped to 9:16) or a FLUX.2 model (a real 9:16 picture); a failing FLUX.2 falls back to schnell."""
+    model = env("FLUX_MODEL", SCHNELL)
+    try:
+        return _flux_call(model, prompt, path)
+    except PipelineError as e:
+        if model == SCHNELL:
+            raise
+        print(f"[warn] {model} failed ({str(e)[:120]}); trying FLUX.1 schnell", flush=True)
+        return _flux_call(SCHNELL, prompt, path)
+
+
+def _flux_call(model, prompt, path):
     import urllib.error
     import urllib.request
-    url = (f"https://api.cloudflare.com/client/v4/accounts/{env('CF_ACCOUNT_ID')}/ai/run/"
-           f"{env('FLUX_MODEL', '@cf/black-forest-labs/flux-1-schnell')}")
-    body = json.dumps({
-        "prompt": f"{prompt}. Vertical composition, subject centered, "
-                  f"{env('IMAGE_STYLE', 'photorealistic, cinematic light')}, sharp focus, natural proportions, "
-                  "anatomically correct, clean uncluttered background, no text, no letters, no logos, no watermark.",
-        "steps": int(env("FLUX_STEPS", "4")),
-    }).encode()
+    url = f"https://api.cloudflare.com/client/v4/accounts/{env('CF_ACCOUNT_ID')}/ai/run/{model}"
+    text = (f"{prompt}. Vertical composition, subject centered, "
+            f"{env('IMAGE_STYLE', 'photorealistic, cinematic light')}, sharp focus, natural proportions, "
+            "anatomically correct, clean uncluttered background, no text, no letters, no logos, no watermark.")
+    if "flux-2" in url:
+        # FLUX.2 takes multipart form data and draws a real 9:16 picture (no crop of a square)
+        import uuid
+        b = uuid.uuid4().hex
+        fields = {"prompt": text, "width": "768", "height": "1344"}
+        body = ("".join(f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'
+                        for k, v in fields.items()) + f"--{b}--\r\n").encode()
+        ctype = f"multipart/form-data; boundary={b}"
+    else:
+        body = json.dumps({"prompt": text, "steps": int(env("FLUX_STEPS", "4"))}).encode()
+        ctype = "application/json"
     req = urllib.request.Request(url, data=body, headers={
-        "Authorization": f"Bearer {env('CF_API_TOKEN')}", "Content-Type": "application/json"})
+        "Authorization": f"Bearer {env('CF_API_TOKEN')}", "Content-Type": ctype})
     try:
         with urllib.request.urlopen(req, timeout=90) as r:
             data = json.loads(r.read())
@@ -1718,22 +1925,90 @@ def pexels_clip(query, path, used):
     return None
 
 
-def _mix_sfx(pcm, rate, starts):
-    """Lay the whoosh from data/sfx/transition.wav under every scene cut."""
+def pixabay_clip(query, path, used):
+    """Free stock video from Pixabay (Pixabay Content License: free, no credit needed). Portrait
+    clips first; a landscape one is centre-cropped by the renderer. Returns a credit line or None."""
+    import urllib.parse
+    import urllib.request
+    key = env("PIXABAY_API_KEY")
+    if not key:
+        return None
+    url = "https://pixabay.com/api/videos/?" + urllib.parse.urlencode(
+        {"key": key, "q": query[:90], "per_page": 20, "safesearch": "true"})
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "VidAuto/1.0"}), timeout=30) as r:
+        hits = json.loads(r.read()).get("hits", [])
+
+    def pick(h):
+        files = [f for f in (h.get("videos") or {}).values() if f.get("url") and (f.get("width") or 0) >= 640]
+        return min(files, key=lambda f: abs((f.get("height") or 0) - H), default=None)
+
+    hits = [h for h in hits if h.get("id") not in used and (h.get("duration") or 0) >= 3 and pick(h)]
+    hits.sort(key=lambda h: 0 if (pick(h).get("height") or 0) > (pick(h).get("width") or 0) else 1)
+    for h in hits[:1]:
+        with urllib.request.urlopen(urllib.request.Request(pick(h)["url"], headers={"User-Agent": "VidAuto/1.0"}),
+                                    timeout=180) as r, open(path, "wb") as out:
+            shutil.copyfileobj(r, out)
+        used.add(h.get("id"))
+        return f"Video by {h.get('user', 'Pixabay')} on Pixabay"
+    return None
+
+
+def _tone(rate, parts, seconds):
+    """A short synthetic sound (no licence needed): parts = [(start s, f0 Hz, f1 Hz, gain)], each a sine
+    sweeping f0 -> f1 with a fast decay."""
+    from array import array
+    n = int(seconds * rate)
+    out = array("h", [0] * n)
+    for start, f0, f1, gain in parts:
+        s0, phase = int(start * rate), 0.0
+        for k in range(max(0, n - s0)):
+            x = k / rate
+            f = f0 + (f1 - f0) * min(1.0, x / max(0.001, seconds - start))
+            phase += 2 * math.pi * f / rate
+            v = math.sin(phase) * gain * math.exp(-x * 22) * min(1.0, x * 400)
+            out[s0 + k] = max(-32768, min(32767, out[s0 + k] + int(v * 32767)))
+    return out
+
+
+def _number_sfx(rate, scenes, starts):
+    """(time, sound) pairs: a pop under each body scene's key number, a coin under the profit."""
+    vol = float(env("NUMBER_SFX", "0") or 0)
+    if vol <= 0:
+        return []
+    pop = _tone(rate, [(0, 950, 420, 0.55 * vol)], 0.12)
+    coin = _tone(rate, [(0, 1320, 1320, 0.35 * vol), (0.07, 1760, 1760, 0.35 * vol)], 0.45)
+    out = []
+    for s, st in zip(scenes[1:], starts[1:]):
+        text = s.get("on_screen") or ""
+        if s.get("loop") or not re.search(r"\d", text):
+            continue
+        profit = re.search(r"profit|/mo|a month|per month|net", text, re.I)
+        out.append((st + 0.05, coin if profit else pop))
+    return out
+
+
+def _mix_sfx(pcm, rate, starts, extra=()):
+    """Lay the whoosh from data/sfx/transition.wav under every scene cut, plus the extra (time, sound)
+    pairs (number pops)."""
     from array import array
     sfx = DATA / "sfx" / "transition.wav"
     vol = float(env("SFX_VOLUME", "0.5") or 0)
-    if vol <= 0 or not sfx.exists() or len(starts) < 2:
+    fx = None
+    if vol > 0 and sfx.exists() and len(starts) >= 2:
+        with wave.open(str(sfx), "rb") as w:
+            if (w.getnchannels(), w.getsampwidth(), w.getframerate()) == (1, 2, rate):
+                fx = array("h", w.readframes(w.getnframes()))
+    if fx is None and not extra:
         return pcm
-    with wave.open(str(sfx), "rb") as w:
-        if (w.getnchannels(), w.getsampwidth(), w.getframerate()) != (1, 2, rate):
-            return pcm
-        fx = array("h", w.readframes(w.getnframes()))
     out = array("h", bytes(pcm))
-    for st in starts[1:]:
+    for st in (starts[1:] if fx is not None else []):
         at = max(0, int((st - 0.2) * rate))
         for k, v in enumerate(fx[: max(0, len(out) - at)]):
             out[at + k] = max(-32768, min(32767, out[at + k] + int(v * vol)))
+    for st, snd in extra:
+        at = max(0, int(st * rate))
+        for k, v in enumerate(snd[: max(0, len(out) - at)]):
+            out[at + k] = max(-32768, min(32767, out[at + k] + v))
     return bytearray(out.tobytes())
 
 
@@ -1933,6 +2208,8 @@ def save_scenes(job, scenes, scenes_in, label, credits):
     _write_json(job / "scenes.json", {"label": label, "credits": credits, "scenes": [
         {"text": s["text"], "audio": s["audio"].name, "words": s["words"],
          "visual": s["visual"].name if s["visual"] else None, "is_video": s["is_video"],
+         **({"visual2": s["visual2"].name, "visual2_is_video": bool(s.get("visual2_is_video")),
+             "split": bool(s.get("split"))} if s.get("visual2") else {}),
          "card": list(s["card"]) if s["card"] else None, "loop": bool(src.get("loop")),
          "on_screen": src["on_screen"], "prompt": src["prompt"], "query": src["query"],
          **({"teaser": src["teaser"]} if src.get("teaser") else {})}
@@ -2015,14 +2292,16 @@ def rerender(job_id):
         first = data["scenes"][0]
         for i, sc in enumerate(data["scenes"]):
             if sc.get("loop"):  # follow the hook, whose picture may have been replaced
-                sc = {**sc, **{k: first.get(k) for k in ("visual", "is_video", "card")}}
+                sc = {**sc, **{k: first.get(k) for k in ("visual", "is_video", "card", "visual2", "visual2_is_video", "split")}}
             visual = d / sc["visual"] if sc.get("visual") else None
             card = tuple(sc["card"]) if sc.get("card") else None
-            overlay = "" if card else ",".join(x for x in (text_overlay(d, i, sc["on_screen"], data["label"], shade=True),
-                                                            teaser_overlay(d, sc.get("teaser"))) if x)
             scenes.append({"text": sc["text"], "audio": d / sc["audio"], "words": sc["words"],
-                           "visual": visual, "is_video": sc["is_video"], "card": card, "overlay": overlay,
-                           "loop": bool(sc.get("loop"))})
+                           "visual": visual, "is_video": sc["is_video"], "card": card,
+                           "visual2": d / sc["visual2"] if sc.get("visual2") else None,
+                           "visual2_is_video": bool(sc.get("visual2_is_video")), "split": bool(sc.get("split")),
+                           "loop": bool(sc.get("loop")), "on_screen": sc.get("on_screen")})
+        for e, ov in zip(scenes, scene_overlays(d, data["scenes"], data["label"])):
+            e["overlay"] = "" if e["card"] else ov
         seconds, _ = render(d, scenes, music_name=result.get("music"))
         job.stage("render", "done", f"{seconds:.1f} s, re-rendered")
         if result:
@@ -2057,13 +2336,16 @@ def render(job, scenes, music_name=None):
             segment_card(job, *s["card"], frames, i, out, loop=s.get("loop", False))
         elif s["is_video"]:
             segment_from_video(s["visual"], frames, out, s.get("overlay", ""))
+        elif s.get("visual2"):
+            segment_two(job, s, frames, i, out)
         else:
             segment_from_image(s["visual"], frames, i, out, s.get("overlay", ""), loop=s.get("loop", False))
         seg_list.append(out.name)
         timeline.append({"text": s["text"], "start": t, "speech": speech, "words": s.get("words")})
         t += length
 
-    pcm = _mix_sfx(pcm, rate, [x["start"] for x in timeline])
+    starts = [x["start"] for x in timeline]
+    pcm = _mix_sfx(pcm, rate, starts, _number_sfx(rate, scenes, starts))
     _write_wav(job / "voice.wav", bytes(pcm), rate)
     (job / "segments.txt").write_text("".join(f"file '{n}'\n" for n in seg_list), encoding="utf-8")
     _ffmpeg(["-f", "concat", "-safe", "0", "-i", "segments.txt", "-c", "copy", "video.mp4"], cwd=job)
@@ -2406,6 +2688,34 @@ def choose_and_build(job_id, hook, title):
         _job_options.reset(token)
 
 
+def _second_shot(d, i, s, used, credits, count, flux_down):
+    """The scene's second shot: Pixabay stock video when allowed and found (body scenes), else a second
+    FLUX picture. Returns (path, is_video) or None. Never fails the video."""
+    if not s.get("prompt2") or s.get("loop"):
+        return None
+    if i > 0 and not s.get("split") and flag("PIXABAY_SHOTS", "false") and env("PIXABAY_API_KEY"):
+        clip = d / f"clip_{i:02}b.mp4"
+        try:
+            credit = pixabay_clip(s["query"], clip, used)
+        except Exception as e:  # network or quota: fall back to a picture
+            print(f"[warn] pixabay failed for '{s['query']}': {e}", flush=True)
+            credit = None
+        if credit:
+            credits.append(credit)
+            count["stock"] += 1
+            return clip, True
+    if flux_down:
+        return None
+    photo = d / f"img_{i:02}b.jpg"
+    try:
+        flux_image(s["prompt2"], photo)
+    except Exception as e:  # a missing second shot only means one shot for this scene
+        print(f"[warn] second picture for scene {i} failed: {e}", flush=True)
+        return None
+    count["ai images"] = count.get("ai images", 0) + 1
+    return photo, False
+
+
 def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, music=None, image_dir=None):
     """Voice, pictures and edit for one version of a plan. Variants call this again with another
     hook, title, voice, music and pictures."""
@@ -2415,10 +2725,16 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
     job.stage("script", "done", f"{len(plan.hooks)} hooks, {len(plan.scenes) + 1 + bool(loop_line)} scenes"
               + (f", part {k}/{total}" if total > 1 else "") + (f", variant {variant}" if variant else ""))
 
+    frame = hook_frame(episode)
+    two = int(_num("SHOTS_PER_SCENE", 1)) >= 2
     scenes_in = [{"text": hook, "prompt": plan.hook_visual, "query": plan.hook_stock_query,
-                  "on_screen": plan.hook_on_screen}] + \
+                  "on_screen": plan.hook_on_screen,
+                  "prompt2": plan.hook_visual_before if frame == "before-after" else "", "split": frame == "before-after"}] + \
                 [{"text": s.narration, "prompt": s.image_prompt, "query": s.stock_query,
-                  "on_screen": s.on_screen} for s in plan.scenes]
+                  "on_screen": s.on_screen,
+                  # the model sometimes leaves the second shot out: then a close-up of the same scene
+                  "prompt2": (s.image_prompt_2.strip() or f"A close-up detail from the same moment: {s.image_prompt}")
+                  if two else ""} for s in plan.scenes]
     if loop_line:
         # only the loop line may stay open; a payoff that also ends on "because" would read
         # "..., because and you can skip...", so close it with a full stop
@@ -2443,13 +2759,19 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
     video_s, source_down, flux_down = 0.0, False, False
     for i, s in enumerate(scenes_in):
         entry = {"text": s["text"], "audio": d / f"voice_{i:02}.wav", "words": words[i],
-                 "visual": None, "is_video": False, "card": None, "overlay": "", "loop": bool(s.get("loop"))}
+                 "visual": None, "is_video": False, "card": None, "overlay": "", "loop": bool(s.get("loop")),
+                 "on_screen": s["on_screen"]}
         clip = d / "hook.mp4"
         reuse = image_dir / f"img_{i:02}.jpg" if image_dir else None
         if s.get("loop"):
             first = scenes[0]
             entry.update(visual=first["visual"], is_video=first["is_video"], card=first["card"],
+                         visual2=first.get("visual2"), split=first.get("split"),
                          overlay="" if first["card"] else text_overlay(d, i, s["on_screen"], label, shade=True))
+        elif i == 0 and frame == "number":
+            # the opening is the big number itself on a moving colour card
+            count["cards"] += 1
+            entry["card"] = (s["on_screen"], label)
         elif reuse and reuse.exists():
             shutil.copy(reuse, d / reuse.name)
             count["reused pictures"] = count.get("reused pictures", 0) + 1
@@ -2501,6 +2823,9 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
                     got = True
             if got:
                 entry.update(visual=photo, overlay=text_overlay(d, i, s["on_screen"], label, shade=True))
+                second = _second_shot(d, i, s, used, credits, count, flux_down)
+                if second:
+                    entry.update(visual2=second[0], visual2_is_video=second[1], split=bool(s.get("split")))
             else:
                 count["cards"] += 1
                 entry["card"] = (s["on_screen"], label)
@@ -2526,8 +2851,11 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
     teaser = _next_teaser(episode, k, total, job.status.get("queue_id"))
     last = max((i for i, e in enumerate(scenes) if not e["loop"]), default=None)
     if teaser and last and not scenes[last]["card"]:
-        scenes[last]["overlay"] = ",".join(x for x in (scenes[last]["overlay"], teaser_overlay(d, teaser)) if x)
         scenes_in[last]["teaser"] = teaser
+    items = [{**s, "card": e["card"]} for e, s in zip(scenes, scenes_in)]
+    for e, ov in zip(scenes, scene_overlays(d, items, label)):
+        if not e["card"]:
+            e["overlay"] = ov
     summary = ", ".join(f"{v} {k}" for k, v in count.items() if v) + (", 1 AI video" if video_s else "")
     job.stage("visuals", "done", summary)
 
@@ -2566,6 +2894,7 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
         "language": env("CHANNEL_LANGUAGE", "en"),
         "hook": hook,
         "comment": (plan.comment or "").strip()[:500] or None,
+        "hook_frame": frame,
         "hook_formula": next((h.formula_id for h in plan.hooks
                               if " ".join(h.text.split()) == " ".join(hook.split())), "your-own"),
         "cover": cover,
