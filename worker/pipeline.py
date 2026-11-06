@@ -110,7 +110,13 @@ SETTINGS_SCHEMA = [
     {"key": "SERIES_RULES", "group": "Content", "label": "Series rules", "type": "textarea"},
     {"key": "SERIES_LABEL", "group": "Content", "label": "Badge on the video ({n} = episode)", "type": "text"},
     {"key": "SERIES_TITLE_PREFIX", "group": "Content", "label": "Title prefix ({n} = episode)", "type": "text"},
+    {"key": "SERIES_TITLE_POSITION", "group": "Content", "label": "Where the episode tag goes in the title", "type": "select",
+     "options": ["start", "end"], "default": "start"},
+    {"key": "END_TEASER", "group": "Content", "label": "Show 'Tomorrow #N: next topic' on the last scene (a reason to follow)", "type": "bool", "default": "false"},
+    {"key": "FIRST_COMMENT", "group": "Content", "label": "Post the video's question to viewers as the first YouTube comment (pin it in YouTube Studio)", "type": "bool", "default": "false"},
     {"key": "BODY_SCENES", "group": "Content", "label": "Scenes after the hook", "type": "number", "min": 3, "max": 10, "default": "6"},
+    {"key": "BODY_WORDS", "group": "Content", "label": "Words in the whole body (sets the length: about 2.6 words a second)", "type": "text", "default": "90-120"},
+    {"key": "HOOK_MAX_WORDS", "group": "Content", "label": "Longest hook, words", "type": "number", "min": 8, "max": 25, "default": "18"},
     {"key": "HOOK_MIN_SCORE", "group": "Content", "label": "Hook score to aim for (rewrite weaker hooks)", "type": "number", "min": 0, "max": 95, "default": "55"},
     {"key": "HOOK_SCORER", "group": "Content", "label": "Hook scorer", "type": "select", "options": ["shorts", "skill"], "default": "shorts"},
     {"key": "HOOK_ROUNDS", "group": "Content", "label": "Hook rewrite rounds (0 = off)", "type": "number", "min": 0, "max": 4, "default": "3"},
@@ -154,6 +160,7 @@ SETTINGS_SCHEMA = [
     {"key": "LABEL_COLOR", "group": "Picture", "label": "Series badge colour", "type": "color", "default": "#FF0033"},
     {"key": "SHADE", "group": "Picture", "label": "Darken pictures (0-0.7)", "type": "number", "min": 0, "max": 0.7, "step": 0.05, "default": "0.35"},
     {"key": "ZOOM", "group": "Picture", "label": "Camera motion (0 = still, 0.25 = strong)", "type": "number", "min": 0, "max": 0.25, "step": 0.01, "default": "0.12"},
+    {"key": "PUNCH_IN", "group": "Picture", "label": "Second shot in long scenes: cut to a closer view halfway (0 = off, 0.3 = much closer)", "type": "number", "min": 0, "max": 0.4, "step": 0.02, "default": "0"},
     {"key": "VISUAL_PROVIDER", "group": "Picture", "label": "Picture source", "type": "select",
      "options": ["auto", "flux", "openverse", "cards", "pexels", "gemini"], "default": "auto"},
     {"key": "IMAGE_STYLE", "group": "Picture", "label": "Picture style (added to every AI prompt)", "type": "text",
@@ -482,6 +489,9 @@ class Plan(BaseModel):
     titles: list[str]
     description: str
     tags: list[str]
+    comment: str = Field(default="", description=(
+        "one short, friendly question to viewers for the first comment under the video, about THIS "
+        "business (e.g. 'Would you start this with two thousand dollars? What would stop you?'), no links"))
     cover_lines: list[str] = Field(default_factory=list, description=(
         "2-3 lines for the video's cover picture, max 14 characters each, no emoji: line 1 is the key "
         "number (e.g. '$4K/MONTH', '10 MIN/DAY'), the rest name the topic in 1-3 words (e.g. 'MOBILE', 'DETAILING')"))
@@ -528,11 +538,35 @@ class FactCheck(BaseModel):
 
 
 def _formulas():
+    """The shared hook formulas, then the channel's own hooks.json: 'skip' drops formula ids that do not fit
+    the channel (e.g. made-up statistics), 'hooks' adds the channel's own first, 'rules' adds rules."""
     path = SKILLS / "yt-script" / "hooks.json"
-    if not path.exists():
-        return [], []
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return data.get("rules", []), data.get("hooks", [])
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    rules, hooks = list(data.get("rules", [])), list(data.get("hooks", []))
+    own = _read_json(space.folder() / "hooks.json") or {}
+    skip = set(own.get("skip") or [])
+    hooks = [h for h in hooks if h.get("id") not in skip]
+    known = {h.get("id") for h in hooks}
+    hooks = [h for h in own.get("hooks") or [] if h.get("id") not in known] + hooks
+    return rules + list(own.get("rules") or []), hooks
+
+
+def _recent_hooks(history, n=8):
+    """The spoken hooks of the last episodes (version A), so a new script does not sound the same."""
+    out, seen = [], set()
+    for h in reversed(history):
+        if h.get("variant") not in (None, "A") or h.get("episode") in seen:
+            continue
+        seen.add(h.get("episode"))
+        try:
+            hook = (_read_json(job_dir(h["job"]) / "result.json") or {}).get("hook")
+        except Exception:  # a deleted video
+            hook = None
+        if hook:
+            out.append(hook)
+        if len(out) >= n:
+            break
+    return out
 
 
 def _voice_profile():
@@ -603,6 +637,8 @@ def _prompt(topic, history, episode, part=None, script=None):
     rules, formulas = _formulas()
     lang = env("CHANNEL_LANGUAGE", "en")
     n_body = int(env("BODY_SCENES", "6"))
+    hook_max = int(_num("HOOK_MAX_WORDS", 18))
+    body_words = env("BODY_WORDS", "90-120").strip() or "90-120"
     series = env("SERIES_NAME")
     N = niche()
     lines = [
@@ -622,7 +658,7 @@ def _prompt(topic, history, episode, part=None, script=None):
         "",
         "HOOK - write exactly 5 different hooks, each built on a different formula below. The hook is the",
         "first 3-5 seconds: it confirms the promise, opens a question the viewer cannot close, and",
-        "proves the payoff exists. Max 18 words. Never open with who we are or 'in this video'.",
+        f"proves the payoff exists. Max {hook_max} words. Never open with who we are or 'in this video'.",
         "Each hook has its own loop_line (max 14 words): the last sentence of the whole video. Read",
         "loop_line and then the hook aloud: together they must sound like one natural sentence or thought,",
         "so the Short loops seamlessly. The loop_line never repeats the hook and never says 'watch again'.",
@@ -630,7 +666,7 @@ def _prompt(topic, history, episode, part=None, script=None):
         "five: (1) SPECIFIC - a concrete number, price or name from the body; (2) YOU - 'you' or 'your' in",
         "the first six words; (3) STAKES - what it costs, what you lose or waste, what to stop or never do;",
         "(4) CURIOSITY - an open gap (why, how, what, but, until, nobody) that the hook does NOT answer",
-        "itself, so never 'because', 'so that', 'which means'; (5) 9-18 words. It must still sound like a",
+        f"itself, so never 'because', 'so that', 'which means'; (5) 8-{hook_max} words. It must still sound like a",
         f"person talking, stay on this exact {N['subject']} and use only figures the body states.",
         "Hook rules: " + " | ".join(rules),
         "Formulas (id - name - shape - example):",
@@ -640,7 +676,7 @@ def _prompt(topic, history, episode, part=None, script=None):
     lines += [
         "",
         f"BODY - exactly {n_body} scenes that follow ANY of the hooks naturally (the numbers in every hook",
-        "must match the body). 1-2 complete spoken sentences per scene, 90-120 words for the whole body.",
+        f"must match the body). 1-2 complete spoken sentences per scene, {body_words} words for the whole body.",
         "Concrete facts, numbers, names. Every scene earns the next one; the last body scene is the PAYOFF",
         "from the script rules and ends with a full stop - the loop_line comes after it and is the ONLY",
         "line that may end open. No 'subscribe' begging.",
@@ -658,8 +694,12 @@ def _prompt(topic, history, episode, part=None, script=None):
         "",
         "TITLES - 5 options, max 60 characters, subject first, a concrete number or name if possible,",
         "must not repeat the hook word for word.",
+        *(["Every title carries a concrete figure or detail from the body (e.g. '$200 a Yard Raking Leaves',",
+           "'The $500 Leaf Business Nobody Wants'), never just the business name, and never an episode number",
+           "(the Studio adds it)."] if env("SERIES_TITLE_POSITION", "start") == "end" else []),
         "DESCRIPTION - 2-3 sentences that answer the query a real person would type, then 3 hashtags",
         "including #shorts. TAGS - 8-12 short search phrases, no '#', no commas inside a tag.",
+        "COMMENT - one short question to viewers about this business, for the first comment.",
         "COVER_LINES - the cover picture viewers see before they tap: 2-3 lines, max 14 characters each,",
         f"line 1 {N['cover']}",
         "in 1-3 plain words. The figure must be one the script really says.",
@@ -708,6 +748,11 @@ def _prompt(topic, history, episode, part=None, script=None):
     if history and not part:  # a later part is about the same topic on purpose
         recent = "; ".join(h["topic"] for h in history[-40:])
         lines += ["", f"Do NOT repeat or closely paraphrase these previous topics: {recent}"]
+        hooks = _recent_hooks(history)
+        if hooks:
+            lines += ["Hooks of the last episodes - do NOT reuse their headline figures, their opening words or",
+                      "their shape (a viewer who saw them must not feel it is the same video again):",
+                      *[f"- {h}" for h in hooks]]
     return "\n".join(lines)
 
 
@@ -746,12 +791,60 @@ def _clean_plan(plan):
     return plan
 
 
+_model_down = {}      # model -> time until which it is skipped (it failed: 503 / 429 / timeout)
+_model_busy = {}      # model -> start time of a call still running
+_model_lock = threading.Lock()
+MODEL_COOLDOWN = 15 * 60
+MODEL_STUCK = 45      # a call running longer than this means the model hangs: the next call skips it
+
+
+class _Interactions:
+    """client.interactions with a circuit breaker: a model that just failed, or still hangs on an earlier
+    call, is skipped at once, so the chain moves to the next model instead of waiting ~90 s at every
+    step of the video (the free tier often answers 503 for hours)."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def create(self, **kw):
+        model, now = kw.get("model"), time.time()
+        with _model_lock:
+            if _model_down.get(model, 0) > now:
+                raise PipelineError(f"{model} skipped: it failed {int((now - _model_down[model] + MODEL_COOLDOWN) / 60)} min ago")
+            if now - _model_busy.get(model, now) > MODEL_STUCK:
+                _model_down[model] = now + MODEL_COOLDOWN
+                raise PipelineError(f"{model} skipped: an earlier call hangs")
+            _model_busy[model] = now
+        try:
+            out = self._inner.create(**kw)
+        except Exception:
+            with _model_lock:
+                _model_down[model] = time.time() + MODEL_COOLDOWN
+            raise
+        finally:
+            with _model_lock:
+                if _model_busy.get(model) == now:
+                    _model_busy.pop(model, None)
+        with _model_lock:
+            _model_down.pop(model, None)
+        return out
+
+
+class _Client:
+    def __init__(self, inner):
+        self._inner = inner
+        self.interactions = _Interactions(inner.interactions)
+
+    def __getattr__(self, name):   # files, models... as they are
+        return getattr(self._inner, name)
+
+
 def _client():
     from google import genai
     key = env("GEMINI_API_KEY")
     if not key:
         raise PipelineError("GEMINI_API_KEY is empty - put it in .env and restart, or set MOCK=true")
-    return genai.Client(api_key=key)
+    return _Client(genai.Client(api_key=key))
 
 
 def _retry(fn, what, tries=3):
@@ -816,11 +909,64 @@ def make_plan(client, topic, history, episode, part=None, script=None):
                 timeout=80,
             ), "text")), 90)
             print(f"[info] script written by {model}", flush=True)
-            return _clean_plan(plan)
+            plan = _clean_plan(plan)
+            return plan if script else _tighten(client, model, plan)
         except Exception as e:
             print(f"[warn] {model} failed: {str(e)[:200]}", flush=True)
             errors.append(f"{model}: {str(e)[:160]}")
     raise PipelineError("all text models failed - " + " | ".join(errors))
+
+
+class Tightened(BaseModel):
+    lines: list[str] = Field(description="the body scenes' narration, shortened, in the same order")
+
+
+def _body_limit():
+    """(low, high) words of the body from BODY_WORDS ('65-80'), or None."""
+    m = re.match(r"\s*(\d+)\s*-\s*(\d+)", env("BODY_WORDS", "90-120"))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _tighten(client, model, plan):
+    """Models write long. A body over BODY_WORDS is cut down by one more call: same scenes, same figures,
+    shorter sentences. A failure keeps the long body (a long video beats no video)."""
+    limit = _body_limit()
+    words = sum(len(s.narration.split()) for s in plan.scenes)
+    if not limit or words <= limit[1] * 1.08:
+        return plan
+    lo, hi = limit
+    per = max(8, hi // max(1, len(plan.scenes)))
+    prompt = "\n".join([
+        f"Shorten the narration of this YouTube Short to {lo}-{hi} words in total (now {words}): the result MUST",
+        f"have at most {hi} words - cut about {max(10, round(100 * (1 - hi / words)))}% of the words.",
+        f"Keep exactly {len(plan.scenes)} lines, in order, each about {per} words or fewer. Keep every number,",
+        "the catch, the insider detail and the last line's concrete first step; keep spoken numbers in words.",
+        "Cut warm-ups, repeats and anything the on-screen text already shows. Natural speech, full sentences;",
+        "transitions like 'So where's the money?' may stay if they are short. The last line ends with a full stop.",
+        "",
+        *[f"{i}. {s.narration}   [on screen: {s.on_screen}]" for i, s in enumerate(plan.scenes, 1)],
+    ])
+    out = None
+    for m in dict.fromkeys([model, *text_models()]):   # the model that wrote it first, then the usual chain
+        try:
+            out = _hard_timeout(lambda: Tightened.model_validate_json(_output(client.interactions.create(
+                model=m, input=prompt, system_instruction=GUARD, timeout=50,
+                response_format={"type": "text", "mime_type": "application/json",
+                                 "schema": Tightened.model_json_schema()}), "text")), 60)
+            break
+        except Exception as e:
+            print(f"[warn] {m} could not shorten the body ({words} words): {str(e)[:160]}", flush=True)
+    if out is None:
+        return plan
+    lines = [x.strip() for x in out.lines if x.strip()]
+    new = sum(len(x.split()) for x in lines)
+    if len(lines) != len(plan.scenes) or new >= words:
+        print(f"[warn] shortened body rejected ({len(lines)} lines, {new} words)", flush=True)
+        return plan
+    for s, line in zip(plan.scenes, lines):
+        s.narration = line
+    print(f"[info] body shortened {words} -> {new} words", flush=True)
+    return plan
 
 
 def fact_check(job, client, plan, own_script=False):
@@ -1100,7 +1246,8 @@ def improve_hooks(job, client, plan):
             "- every figure must be one the body states (below) - never invent or inflate numbers;",
             "- spoken English a real person would say; numbers in words, no digits or symbols;",
             "- no false promise, no 'guaranteed', no clickbait the video does not pay off;",
-            "- 'you' at most twice; no keyword lists.",
+            "- 'you' at most twice; no keyword lists;",
+            f"- at most {int(_num('HOOK_MAX_WORDS', 18))} words, and it must sound natural read aloud once.",
             "Each needs its own loop_line (max 14 words): the video's last sentence that flows straight into",
             "the hook when the Short replays; it never repeats the hook.",
             "",
@@ -1353,6 +1500,10 @@ def segment_from_image(img, frames, idx, out, overlay="", loop=False):
         # the loop ending shows the hook picture and zooms out to exactly the hook's first frame
         # (zoom 1, centred), so when the Short replays the cut is invisible
         z, x = f"{1 + zm}-{zm}*on/{max(1, frames - 1)}", "iw/2-(iw/zoom/2)"
+    punch = max(0.0, min(0.4, _num("PUNCH_IN", 0)))
+    if punch and not loop and idx > 0 and frames >= 3 * FPS:
+        # a second shot halfway: a hard cut to a closer view of the same picture keeps the eye busy
+        z = f"({z})*if(lt(on,{frames // 2}),1,{1 + punch})"
     # zoompan cost grows with the source size; 1.4x is smooth enough and ~2x faster than 2x on a laptop CPU
     sw, sh = int(W * 1.4) // 2 * 2, int(H * 1.4) // 2 * 2
     vf = (f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={sw}:{sh},"
@@ -1414,6 +1565,36 @@ def text_overlay(job, idx, text, label, shade=False, force_text=False):
                      f":box=1:boxcolor={_hex_ff(env('LABEL_COLOR', '#FF0033'), 'FF0033')}@0.92:boxborderw=18"
                      ":x=(w-text_w)/2:y=290")
     return ",".join(parts)
+
+
+def teaser_overlay(job, text):
+    """'TOMORROW #9: PORTA-POTTY RENTALS' under the series badge on the last scene: a reason to follow."""
+    if not text:
+        return ""
+    parts = []
+    for k, line in enumerate(_wrap(text.upper(), 22)[:2]):
+        f = job / f"teaser_{k}.txt"
+        f.write_text(line, encoding="utf-8")
+        parts.append(f"drawtext=fontfile={FONT_BOLD}:textfile={f.name}:fontsize=50:fontcolor=white"
+                     f":box=1:boxcolor=black@0.78:boxborderw=16:x=(w-text_w)/2:y={400 + k * 82}"
+                     ":enable='gte(t,0.4)'")
+    return ",".join(parts)
+
+
+def _next_teaser(episode, k, total, current=None):
+    """The teaser text, or '' (off, a split story's next part, or nothing queued). current: this video's own
+    queue item id - it is marked used only once the video is made, so it is skipped here."""
+    if not flag("END_TEASER", "false") or (total > 1 and k < total):
+        return ""
+    try:
+        import topics
+        item = next((x for x in topics._load() if x["state"] == "todo" and x["id"] != current), None)
+    except Exception as e:  # the teaser is never worth a failed video
+        print(f"[warn] no teaser: {e}", flush=True)
+        return ""
+    if not item:
+        return ""
+    return f"Tomorrow #{episode + 1}: {item['topic']}" if episode else f"Next: {item['topic']}"
 
 
 def segment_card(job, text, label, frames, idx, out, loop=False):
@@ -1753,7 +1934,8 @@ def save_scenes(job, scenes, scenes_in, label, credits):
         {"text": s["text"], "audio": s["audio"].name, "words": s["words"],
          "visual": s["visual"].name if s["visual"] else None, "is_video": s["is_video"],
          "card": list(s["card"]) if s["card"] else None, "loop": bool(src.get("loop")),
-         "on_screen": src["on_screen"], "prompt": src["prompt"], "query": src["query"]}
+         "on_screen": src["on_screen"], "prompt": src["prompt"], "query": src["query"],
+         **({"teaser": src["teaser"]} if src.get("teaser") else {})}
         for s, src in zip(scenes, scenes_in)]})
 
 
@@ -1836,7 +2018,8 @@ def rerender(job_id):
                 sc = {**sc, **{k: first.get(k) for k in ("visual", "is_video", "card")}}
             visual = d / sc["visual"] if sc.get("visual") else None
             card = tuple(sc["card"]) if sc.get("card") else None
-            overlay = "" if card else text_overlay(d, i, sc["on_screen"], data["label"], shade=True)
+            overlay = "" if card else ",".join(x for x in (text_overlay(d, i, sc["on_screen"], data["label"], shade=True),
+                                                            teaser_overlay(d, sc.get("teaser"))) if x)
             scenes.append({"text": sc["text"], "audio": d / sc["audio"], "words": sc["words"],
                            "visual": visual, "is_video": sc["is_video"], "card": card, "overlay": overlay,
                            "loop": bool(sc.get("loop"))})
@@ -1974,6 +2157,11 @@ def mark_uploaded(job_id, video_id, mode=None):
         "studio_url": f"https://studio.youtube.com/video/{video_id}/edit",
     }
     job.stage("youtube", "done", f"uploaded ({mode or 'private'})")
+    try:
+        import social
+        social.youtube_first_comment(job_id, video_id)
+    except Exception as e:  # a comment is never worth a failed upload
+        print(f"[warn] first comment: {e}", flush=True)
     return job.status["youtube"]
 
 
@@ -2033,6 +2221,14 @@ def _series_title(title, prefix):
     """Prefix the title once: the model sometimes adds the episode or part tag itself, anywhere."""
     if not prefix:
         return title[:100]
+    if env("SERIES_TITLE_POSITION", "start") == "end":
+        # 'Business #8:' -> '... (#8)': the feed shows the first ~40 characters, so the subject goes first
+        tail = " (" + prefix.strip().rstrip(":").strip() + ")"
+        word = re.escape(prefix.split("#")[0].split("(")[0].strip())   # 'Business' of 'Business #8:'
+        title = re.sub(rf"\(?\s*(?:{word}\s*)?#\s*\d+\s*\)?\s*:?" if word else r"\(?\s*#\s*\d+\s*\)?\s*:?",
+                       " ", title, flags=re.I)
+        title = re.sub(r"\s+", " ", title).strip(" -:|")
+        return title[:100 - len(tail)].rstrip() + tail
     tag = re.escape(prefix.split("#")[0].split("(")[0].strip())
     title = re.sub(rf"\(?\s*{tag}\s*#\s*\d+\s*\)?\s*:?\s*", " ", title, flags=re.I) if tag else title
     title = re.sub(r"\(?\s*part\s*\d+\s*(/|of)\s*\d+\s*\)?\s*:?\s*", " ", title, flags=re.I)
@@ -2327,6 +2523,11 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
             count["cards"] += 1
         scenes.append(entry)
         job.stage("visuals", "running", f"{i + 1}/{n} · {provider}")
+    teaser = _next_teaser(episode, k, total, job.status.get("queue_id"))
+    last = max((i for i, e in enumerate(scenes) if not e["loop"]), default=None)
+    if teaser and last and not scenes[last]["card"]:
+        scenes[last]["overlay"] = ",".join(x for x in (scenes[last]["overlay"], teaser_overlay(d, teaser)) if x)
+        scenes_in[last]["teaser"] = teaser
     summary = ", ".join(f"{v} {k}" for k, v in count.items() if v) + (", 1 AI video" if video_s else "")
     job.stage("visuals", "done", summary)
 
@@ -2364,6 +2565,7 @@ def _build(job, ctx, hook, loop_line, title, variant=None, variant_of=None, musi
         "region_code": env("YOUTUBE_REGION", "US"),
         "language": env("CHANNEL_LANGUAGE", "en"),
         "hook": hook,
+        "comment": (plan.comment or "").strip()[:500] or None,
         "hook_formula": next((h.formula_id for h in plan.hooks
                               if " ".join(h.text.split()) == " ".join(hook.split())), "your-own"),
         "cover": cover,

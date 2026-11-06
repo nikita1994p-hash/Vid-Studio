@@ -205,7 +205,7 @@ async function renderVideo(id) {
         ${factCard(factcheck)}
         ${promptCard(promptcheck)}
         ${ready && status.kind !== "uploaded" ? coverCard(base, cover, sceneData, files) : ""}
-        ${ready ? publishCard(status, accounts) : ""}
+        ${ready ? publishCard(status, accounts, result) : ""}
         ${ready && status.kind !== "uploaded" ? variantsCard(result, plan) : ""}
         <div class="tabs">
           ${["details", "script", "files"].map((t) => `<button class="tab ${currentTab === t ? "active" : ""}" data-tab="${t}">${
@@ -341,7 +341,10 @@ async function renderVideo(id) {
 const SOCIAL_STATE = { queued: "queued", uploading: "uploading…", posted: "posted ✓", error: "failed",
   waiting: "waiting for you" };
 
-function publishCard(status, accounts) {
+function publishCard(status, accounts, result) {
+  // a version (B, C...) is the same topic as the original: YouTube gets one video a day, so its
+  // box starts unticked and the versions go to the other platforms
+  const version = !!result?.variant_of;
   const social = status.social || {};
   const yt = status.youtube || {};
   const rows = accounts.map((a) => {
@@ -350,13 +353,15 @@ function publishCard(status, accounts) {
     const chip = s ? `<span class="chip ${s.state === "posted" ? "done" : s.state === "error" ? "error" : "uploading"}" title="${esc(s.error || s.note || "")}">${esc(SOCIAL_STATE[s.state] || s.state)}</span>` : "";
     const link = s?.url ? ` <a href="${esc(s.url)}" target="_blank" rel="noopener">open ↗</a>` : "";
     return `<label class="platform ${a.connected ? "" : "off"}">
-      <input type="checkbox" name="platform" value="${esc(a.id)}" ${a.connected ? "" : "disabled"} ${a.connected && a.id === "youtube" && !s ? "checked" : ""} ${busyHere ? "disabled" : ""}>
+      <input type="checkbox" name="platform" value="${esc(a.id)}" ${a.connected ? "" : "disabled"} ${a.connected && a.id === "youtube" && !s && !version ? "checked" : ""} ${busyHere ? "disabled" : ""}>
       <b>${esc(a.name)}</b> <span class="muted">${a.connected ? "→ " + esc(a.account?.name || "") : "not connected"}</span> ${chip}${link}
       ${s?.state === "error" ? `<div class="error-box" style="margin:4px 0 0">${esc(s.error || "")}</div>` : ""}</label>`;
   }).join("");
   const none = !accounts.some((a) => a.connected);
   return `<section class="card" style="margin-top:16px"><h3>Publish</h3>
     ${none ? `<p class="muted">No account connected yet — <a href="#/accounts">Accounts</a>.</p>` : ""}
+    ${version ? `<p class="muted small">This is a version of an earlier video. Post it to the other platforms:
+      two videos on one topic the same day split the YouTube views.</p>` : ""}
     <div class="platforms">${rows}</div>
     <div id="tiktok-form" class="tt-form" hidden></div>
     <div class="radio-row">

@@ -161,8 +161,13 @@ def _instagram(stats, posts):
         try:
             ins = social._call("GET", f"{social.GRAPH}/{p['id']}/insights", params={"metric": "views", "access_token": t})
             views = ((ins.get("data") or [{}])[0].get("values") or [{}])[0].get("value", 0)
-        except PipelineError:
-            pass
+        except PipelineError as e:
+            # (#10) = the Meta app's Instagram configuration lacks instagram_manage_insights: say so
+            # instead of quietly showing 0 views next to real likes
+            stats["errors"]["instagram views"] = (
+                "Instagram does not let the app read views: add the permission instagram_manage_insights to the "
+                "Instagram configuration of your Meta app, then Accounts -> Instagram -> Log out -> Connect. "
+                f"({str(e)[:160]})" if "(#10)" in str(e) else str(e)[:300])
         stats["posts"][f"instagram:{p['id']}"] = {"views": views, "likes": m.get("like_count", 0),
                                                   "comments": m.get("comments_count", 0)}
 

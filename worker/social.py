@@ -594,7 +594,32 @@ def _post_youtube(acct, job_id, video, result, mode):
             break
         except Exception as e:
             note = f"cover not set (tried for 6 min): {str(e)[:120]}"
+    try:
+        youtube_first_comment(job_id, vid)
+    except Exception as e:  # a comment is never worth a failed post
+        print(f"[warn] first comment: {e}", flush=True)
     return {"url": f"https://youtube.com/shorts/{vid}", "id": vid, "note": note}
+
+
+def youtube_first_comment(job_id, video_id):
+    """The video's question to viewers as the channel's own first comment (FIRST_COMMENT). The API cannot
+    pin it: pin it in YouTube Studio or the app (comment -> ... -> Pin). Posted once per video."""
+    if not flag("FIRST_COMMENT", "false") or pipeline.SANDBOX:
+        return None
+    job = pipeline.Job(job_id)
+    if job.status.get("first_comment"):
+        return None
+    text = ((pipeline.load_job(job_id).get("result") or {}).get("comment") or "").strip()
+    if not text:
+        return None
+    acct = _token("youtube")
+    out = _youtube_call("POST", "https://www.googleapis.com/youtube/v3/commentThreads", params={"part": "snippet"},
+                        json_body={"snippet": {"videoId": video_id,
+                                               "topLevelComment": {"snippet": {"textOriginal": text[:500]}}}},
+                        headers={"Authorization": f"Bearer {acct['access_token']}"})
+    job.status["first_comment"] = {"id": (out or {}).get("id"), "text": text[:500], "at": pipeline._now()}
+    job.save()
+    return (out or {}).get("id")
 
 
 def _uploaded_id(job_id):

@@ -140,13 +140,22 @@ def front(t, topic_words, kind=None):
     return max(0, min(100, s))
 
 
+def _hook_max():
+    """The channel's longest hook (HOOK_MAX_WORDS, default 18)."""
+    try:
+        import pipeline
+        return max(8, int(pipeline._num("HOOK_MAX_WORDS", 18)))
+    except Exception:  # scored outside the Studio
+        return 18
+
+
 def brevity(t, topic_words=None, kind=None):
-    n = len(t.split())
+    n, hi = len(t.split()), _hook_max()
     if n == 0:
         return 0
-    if 8 <= n <= 18:
+    if 8 <= n <= hi:
         return 100
-    return max(30, 100 - (8 - n) * 10) if n < 8 else max(10, 100 - (n - 18) * 8)
+    return max(30, 100 - (8 - n) * 10) if n < 8 else max(10, 100 - (n - hi) * 12)
 
 
 PROPS = [("SPECIFICITY", specificity), ("STAKES", stakes), ("CURIOSITY", curiosity),
