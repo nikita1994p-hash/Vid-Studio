@@ -194,7 +194,29 @@ def _x(stats, posts):
 
 
 # TikTok (_tiktok) joins once TikTok approves the video.list scope; until then the app does not ask for it
-FETCHERS = {"youtube": _youtube, "instagram": _instagram, "threads": _threads, "x": _x}
+def _facebook(stats, posts):
+    """Reels on the connected Page: plays (fb_reels_total_plays), likes and comments, with the Page token."""
+    acct = social._token("facebook")
+    page = next((x for x in acct.get("pages", []) if x["id"] == acct.get("page_id")), None)
+    if not page:
+        return
+    pt = page["access_token"]
+    for p in (x for x in posts if x["platform"] == "facebook" and x["id"]):
+        views = 0
+        try:
+            ins = social._call("GET", f"{social.GRAPH}/{p['id']}/video_insights",
+                               params={"metric": "fb_reels_total_plays", "access_token": pt})
+            views = ((ins.get("data") or [{}])[0].get("values") or [{}])[0].get("value", 0) or 0
+        except PipelineError as e:
+            stats["errors"]["facebook views"] = str(e)[:300]
+        m = social._call("GET", f"{social.GRAPH}/{p['id']}", params={
+            "fields": "likes.summary(true).limit(0),comments.summary(true).limit(0)", "access_token": pt})
+        stats["posts"][f"facebook:{p['id']}"] = {"views": views,
+                                                 "likes": (m.get("likes") or {}).get("summary", {}).get("total_count", 0),
+                                                 "comments": (m.get("comments") or {}).get("summary", {}).get("total_count", 0)}
+
+
+FETCHERS = {"youtube": _youtube, "instagram": _instagram, "facebook": _facebook, "threads": _threads, "x": _x}
 
 
 def refresh():
