@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://nikita1994p-hash.github.io/Vid-Studio/sitemap.xml
