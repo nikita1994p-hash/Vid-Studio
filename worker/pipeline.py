@@ -1934,7 +1934,7 @@ def pixabay_clip(query, path, used):
     if not key:
         return None
     url = "https://pixabay.com/api/videos/?" + urllib.parse.urlencode(
-        {"key": key, "q": query[:90], "per_page": 20, "safesearch": "true"})
+        {"key": key, "q": query[:90], "per_page": 20, "safesearch": "true", "video_type": "film"})   # no cartoons
     with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "VidAuto/1.0"}), timeout=30) as r:
         hits = json.loads(r.read()).get("hits", [])
 
@@ -1942,7 +1942,12 @@ def pixabay_clip(query, path, used):
         files = [f for f in (h.get("videos") or {}).values() if f.get("url") and (f.get("width") or 0) >= 640]
         return min(files, key=lambda f: abs((f.get("height") or 0) - H), default=None)
 
-    hits = [h for h in hits if h.get("id") not in used and (h.get("duration") or 0) >= 3 and pick(h)]
+    # Pixabay matches loosely ("christmas tree lot" finds dark particle loops): the clip's own tags must
+    # share at least two words with the query (one if the query has one), else the scene gets a picture
+    keys = {w for w in re.findall(r"[a-z]+", query.lower()) if len(w) > 2}
+    need = min(2, len(keys))
+    hits = [h for h in hits if h.get("id") not in used and (h.get("duration") or 0) >= 3 and pick(h)
+            and sum(1 for k in keys if k in (h.get("tags") or "").lower()) >= need]
     hits.sort(key=lambda h: 0 if (pick(h).get("height") or 0) > (pick(h).get("width") or 0) else 1)
     for h in hits[:1]:
         with urllib.request.urlopen(urllib.request.Request(pick(h)["url"], headers={"User-Agent": "VidAuto/1.0"}),
