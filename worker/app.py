@@ -32,7 +32,9 @@ import mail
 import niches
 import notify
 import pipeline
+import learn
 import plans
+import refs
 import social
 import space
 import topics
@@ -96,7 +98,16 @@ def _redo_loop(pause=1200, give_up=48):
             _busy.release()
 
 
+def _refs_loop():
+    """References: every channel searches YouTube when its REF_EVERY_DAYS have passed (checked every 15 min)."""
+    import time
+    while True:
+        time.sleep(900)
+        refs.due_channels()
+
+
 if not pipeline.SANDBOX:   # the test copy must not answer the real bot's buttons or spend the picture quota
+    threading.Thread(target=_refs_loop, daemon=True).start()
     threading.Thread(target=_stats_loop, daemon=True).start()
     threading.Thread(target=notify.poll_loop, daemon=True).start()   # Telegram button presses
     threading.Thread(target=_redo_loop, daemon=True).start()         # FLUX pictures for card-only videos
@@ -391,6 +402,7 @@ def _security_headers():
            f"script-src 'self' {_inline_hashes()}; "
            "style-src 'self' 'unsafe-inline'; font-src 'self'; "   # fonts are served by the Studio, never Google's servers
            "img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self'; "
+           "frame-src https://www.youtube-nocookie.com; "   # References play the original Short in the Studio
            "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
     headers = {"Content-Security-Policy": csp, "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff",
                "Referrer-Policy": "strict-origin-when-cross-origin",
@@ -1502,6 +1514,62 @@ def delete_topic(item_id: str):
 def clear_topics(state: str = "used"):
     topics.clear(state)
     return topics.summary()
+
+
+# ------------------------------------------------------------------ references
+
+class RefUrlRequest(BaseModel):
+    url: str
+
+
+class RefTakeRequest(BaseModel):
+    topic: str | None = None
+
+
+class RefStateRequest(BaseModel):
+    state: str
+
+
+@app.get("/api/refs")
+def get_refs():
+    out = refs.summary()
+    try:
+        out["insights"] = learn.insights()
+    except Exception as e:   # stats not fetched yet
+        out["insights"] = {"videos": 0, "error": str(e)[:200]}
+    return out
+
+
+@app.post("/api/refs/search")
+def search_refs():
+    try:
+        return refs.search(force=True)
+    except Exception as e:
+        _fail(e)
+
+
+@app.post("/api/refs")
+def add_ref(req: RefUrlRequest):
+    try:
+        return refs.add_url(req.url)
+    except Exception as e:
+        _fail(e)
+
+
+@app.post("/api/refs/{ref_id}/take")
+def take_ref(ref_id: str, req: RefTakeRequest):
+    try:
+        return refs.take(ref_id, req.topic)
+    except Exception as e:
+        _fail(e)
+
+
+@app.patch("/api/refs/{ref_id}")
+def ref_state(ref_id: str, req: RefStateRequest):
+    try:
+        return refs.set_state(ref_id, req.state)
+    except Exception as e:
+        _fail(e)
 
 
 # ------------------------------------------------------------------ telegram

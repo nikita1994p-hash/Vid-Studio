@@ -1152,7 +1152,7 @@ async function renderTopics() {
         <li class="topic ${esc(x.state)}" data-id="${esc(x.id)}" ${canDrag ? 'draggable="true"' : ""}>
           ${canDrag ? '<span class="grip" title="Drag to reorder">⋮⋮</span>' : ""}
           <span class="topic-n">${i + 1}</span>
-          <span class="topic-name">${esc(x.topic)}${topicCheck(x.check)}</span>
+          <span class="topic-name">${esc(x.topic)}${topicCheck(x.check)}${x.ref ? ` <a class="chip variant" href="${esc(x.ref.url)}" target="_blank" rel="noopener noreferrer" title="From References: ${esc(x.ref.title)} — ${compact(x.ref.views)} views">reference ↗</a>` : ""}</span>
           ${topicFilter === "all" ? `<span class="chip ${x.state === "used" ? "done" : "queued"}">${STATE[x.state]}</span>` : ""}
           ${x.job_id ? `<a href="#/video/${esc(x.job_id)}">video →</a>` : ""}
           <span class="topic-actions">
@@ -1296,6 +1296,166 @@ async function renderAB() {
     : `<section class="card wide" style="margin-top:16px"><div class="empty">No tests yet. Open a finished video and press “Make versions”.</div></section>`}`;
 }
 
+// ------------------------------------------------------------------ references
+
+let refFilter = "new";
+let refSort = "fit";
+const compact = (v) => (v == null ? "—" : Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(v));
+const daysAgo = (iso) => {
+  if (!iso) return "";
+  const d = Math.max(0, Math.round((Date.now() - new Date(iso)) / 864e5));
+  return d === 0 ? "today" : d === 1 ? "1 day ago" : `${d} days ago`;
+};
+const fitChip = (f) => f == null ? `<span class="fit">not rated</span>`
+  : `<span class="fit ${f >= 70 ? "hi" : f >= 40 ? "mid" : "lo"}" title="How well it fits this channel (0-100)">Fit ${f}</span>`;
+const REF_SORT = {
+  fit: (a, b) => (b.fit ?? -1) - (a.fit ?? -1) || (b.outlier ?? 0) - (a.outlier ?? 0),
+  outlier: (a, b) => (b.outlier ?? 0) - (a.outlier ?? 0),
+  views: (a, b) => b.views - a.views,
+  new: (a, b) => (b.published || "").localeCompare(a.published || ""),
+};
+
+function refOurs(o) {
+  if (!o) return "";
+  if (!o.job_id) return `<div class="ref-ours muted">${o.topic_state === "todo" ? "⏳ In the Topics queue — waiting for its video" : "Topic " + esc(o.topic_state)}</div>`;
+  const res = o.youtube_id
+    ? `<b>${compact(o.views)}</b> views · ${o.retention != null ? `<span class="ret"><span class="ret-fill" style="width:${Math.min(100, o.retention)}%"></span></span> <b>${o.retention}%</b> viewed` : "retention after Earnings → Refresh"}`
+    : `<span class="muted">not on YouTube yet</span>`;
+  return `<div class="ref-ours">🎬 Our video: <a href="#/video/${esc(o.job_id)}">${esc(o.title || "open")}</a><br>${res}</div>`;
+}
+
+function refCard(x) {
+  return `<article class="ref" data-id="${esc(x.id)}">
+    <button class="ref-thumb" data-play="${esc(x.id)}" title="Watch it here">
+      <img src="${esc(x.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer">
+      <span class="ref-play">▶</span>${x.seconds ? `<span class="ref-dur">${fmtSec(x.seconds)}</span>` : ""}</button>
+    <div class="ref-body">
+      <a class="ref-title" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer" title="Open on YouTube">${esc(x.title)}</a>
+      <div class="muted ref-meta">${esc(x.channel)}${x.channel_subs != null ? ` · ${compact(x.channel_subs)} subs` : ""} · ${daysAgo(x.published)}</div>
+      <div class="ref-stats">
+        <span title="Views"><b>${compact(x.views)}</b> views</span>
+        ${x.outlier != null ? `<span title="Views ÷ the channel's subscribers: how far the video beat its own channel"><b>×${compact(x.outlier)}</b> subs</span>` : ""}
+        <span title="Views per day since it was posted"><b>${compact(x.per_day)}</b>/day</span>
+        <span title="Likes">❤ ${compact(x.likes)}</span><span title="Comments">💬 ${compact(x.comments)}</span></div>
+      <div class="ref-fit">${fitChip(x.fit)} ${x.why ? `<span class="muted">${esc(x.why)}</span>` : ""}</div>
+      ${x.topic ? `<div class="ref-topic">→ <b>${esc(x.topic)}</b>${x.angle ? `<div class="muted">${esc(x.angle)}</div>` : ""}</div>` : ""}
+      ${x.state === "taken" ? refOurs(x.ours) : ""}
+      <div class="ref-actions">
+        ${x.state === "new" ? `<button class="btn btn-primary btn-sm" data-take="${esc(x.id)}">✅ Take</button>
+          <button class="btn btn-text" data-take-edit="${esc(x.id)}" title="Change the topic, then take">✎</button>
+          <button class="btn btn-text" data-skip="${esc(x.id)}">Skip</button>` : ""}
+        ${x.state === "skipped" ? `<button class="btn btn-text" data-restore="${esc(x.id)}">↺ Back to new</button>` : ""}
+        <a class="btn btn-text" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">YouTube ↗</a></div>
+    </div></article>`;
+}
+
+function refInsights(ins) {
+  if (!ins || !ins.videos) return `<div class="empty">Appears when posted videos have YouTube retention (Earnings → Refresh).</div>`;
+  const row = (v) => `<li><div>${esc(v.hook || v.title)}</div>
+    <div class="muted"><span class="ret"><span class="ret-fill" style="width:${Math.min(100, v.retention)}%"></span></span>
+      <b>${v.retention}%</b> viewed · ${compact(v.views)} views · ${esc(v.formula)} · ${fmtSec(v.seconds)}
+      · <a href="#/video/${esc(v.job_id)}">video</a></div></li>`;
+  const table = (rows, what) => rows.length ? `<table class="compact"><thead><tr><th>${what}</th><th>Videos</th><th>Avg % viewed</th><th>Avg views</th></tr></thead>
+    <tbody>${rows.map((r) => `<tr><td>${esc(r.name)}</td><td>${r.videos}</td><td>${r.retention}%</td><td>${compact(r.views)}</td></tr>`).join("")}</tbody></table>` : "";
+  return `${ins.advice ? `<p>💡 ${esc(ins.advice)}</p>` : ""}
+    <h3>Watched longest</h3><ol class="ref-hooks">${ins.best.map(row).join("")}</ol>
+    ${ins.worst.length ? `<h3>Lost viewers</h3><ol class="ref-hooks">${ins.worst.map(row).join("")}</ol>` : ""}
+    ${table(ins.formula, "Hook formula")}${table(ins.length, "Length")}${table(ins.frame, "First frame")}
+    <p class="muted" style="font-size:12px;margin-bottom:0">${ins.learn ? "These hooks go into every new script as examples (Settings → Content)." : "Learning from stats is off (Settings → Content)."}</p>`;
+}
+
+function refPlayer(x, onAction) {
+  const box = document.createElement("div");
+  box.className = "ref-modal";
+  box.innerHTML = `<div class="ref-modal-inner" role="dialog" aria-label="${esc(x.title)}">
+    <button class="btn btn-text ref-close" title="Close (Esc)">✕</button>
+    <div class="ref-frame"><iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(x.id)}?autoplay=1&rel=0&playsinline=1"
+      title="${esc(x.title)}" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>
+    <div class="ref-side">${refCard(x).replace(/<button class="ref-thumb"[\s\S]*?<\/button>/, "")}</div></div>`;
+  const close = () => { box.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  box.addEventListener("click", (e) => { if (e.target === box || e.target.closest(".ref-close")) close(); });
+  document.addEventListener("keydown", onKey);
+  document.body.append(box);
+  onAction(box, close);
+}
+
+async function renderRefs() {
+  const r = await api("/api/refs");
+  const items = r.items.filter((x) => x.state === refFilter).sort(REF_SORT[refSort]);
+  const nextIn = r.next_search ? new Date(r.next_search) : null;
+  view.innerHTML = `<h1>References</h1>
+    <p class="muted">Shorts in your niche that took off on YouTube. The Studio searches every <b>${r.every_days} days</b>
+      ${r.enabled ? "" : "(<b>off</b> — Settings → References)"} for: ${r.queries.map((q) => `<b>${esc(q)}</b>`).join(", ")}.
+      Click a video to watch it here. <b>Take</b> puts its topic first in Topics and gives the script writer its angle; <b>Skip</b> hides it.</p>
+    <div class="grid">
+      <section class="card"><h2>Search</h2>
+        ${r.connected ? "" : `<div class="error-box">Connect YouTube first (Accounts) — the search uses its API.</div>`}
+        <p class="muted">Last search: <b>${r.last_search ? when(r.last_search) : "never"}</b>${nextIn ? ` · next: <b>${when(nextIn.toISOString())}</b>` : ""}</p>
+        ${r.last_error ? `<div class="error-box">Last search failed: ${esc(r.last_error)}</div>` : ""}
+        <div class="actions"><button class="btn btn-primary" id="ref-search" ${r.connected ? "" : "disabled"}>🔎 Search now</button></div>
+        <form id="ref-add" class="actions"><input name="url" placeholder="…or paste a YouTube link you found" style="flex:1;min-width:0">
+          <button class="btn btn-outline">Add</button></form>
+        <p class="muted" style="font-size:12px;margin-bottom:0">TikTok and Instagram have no API to search other people's videos — YouTube only.</p></section>
+      <section class="card"><h2>What works on your channel</h2>${refInsights(r.insights)}</section>
+    </div>
+    <section class="card wide" style="margin-top:16px">
+      <div class="tabs" style="margin-top:0">${["new", "taken", "skipped"].map((s) =>
+        `<button class="tab ${refFilter === s ? "active" : ""}" data-filter="${s}">${{ new: "New", taken: "Taken", skipped: "Skipped" }[s]} (${r.counts[s]})</button>`).join("")}
+        <label class="ref-sort">Sort <select id="ref-sort">${Object.entries({ fit: "Best fit", outlier: "Beat its channel most", views: "Most views", new: "Newest" })
+          .map(([k, v]) => `<option value="${k}" ${refSort === k ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>
+      ${items.length ? `<div class="refs">${items.map(refCard).join("")}</div>`
+        : `<div class="empty">${refFilter === "new" ? (r.last_search ? "Nothing new — the next search brings more." : "Press “Search now” for the first references.") : "Nothing here."}</div>`}
+    </section>`;
+
+  const busy = async (btn, fn) => {
+    if (btn) btn.disabled = true;
+    try { await fn(); } catch (e) { toast(e.message, true); }
+    renderRefs();
+  };
+  const take = (id, edit) => {
+    const x = r.items.find((i) => i.id === id);
+    let topic = x?.topic || "";
+    if (edit || !topic) {
+      topic = prompt("Topic for the Topics queue:", topic);
+      if (!topic || !topic.trim()) return null;
+    }
+    return () => api(`/api/refs/${encodeURIComponent(id)}/take`, { method: "POST", body: JSON.stringify({ topic }) })
+      .then(() => toast(`“${topic}” is now first in Topics`));
+  };
+  const wire = (root, after = () => {}) => {
+    root.querySelectorAll("[data-take]").forEach((b) => b.addEventListener("click", () => { const f = take(b.dataset.take); if (f) { after(); busy(b, f); } }));
+    root.querySelectorAll("[data-take-edit]").forEach((b) => b.addEventListener("click", () => { const f = take(b.dataset.takeEdit, true); if (f) { after(); busy(b, f); } }));
+    root.querySelectorAll("[data-skip]").forEach((b) => b.addEventListener("click", () => { after();
+      busy(b, () => api(`/api/refs/${encodeURIComponent(b.dataset.skip)}`, { method: "PATCH", body: JSON.stringify({ state: "skipped" }) })); }));
+    root.querySelectorAll("[data-restore]").forEach((b) => b.addEventListener("click", () => { after();
+      busy(b, () => api(`/api/refs/${encodeURIComponent(b.dataset.restore)}`, { method: "PATCH", body: JSON.stringify({ state: "new" }) })); }));
+  };
+  wire(view);
+  view.querySelectorAll("[data-play]").forEach((b) => b.addEventListener("click", () => {
+    const x = r.items.find((i) => i.id === b.dataset.play);
+    if (x) refPlayer(x, (box, close) => wire(box, close));
+  }));
+  view.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => { refFilter = b.dataset.filter; renderRefs(); }));
+  $("#ref-sort").addEventListener("change", (e) => { refSort = e.target.value; renderRefs(); });
+  $("#ref-search").addEventListener("click", (ev) => {
+    ev.target.textContent = "🔎 Searching YouTube…";
+    busy(ev.target, async () => {
+      const s = await api("/api/refs/search", { method: "POST" });
+      toast(`Found ${s.added} new reference(s), ${s.fit} fit the channel`);
+      refFilter = "new";
+    });
+  });
+  $("#ref-add").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const url = ev.target.url.value.trim();
+    if (url) busy(ev.target.querySelector("button"), async () => {
+      await api("/api/refs", { method: "POST", body: JSON.stringify({ url }) });
+      toast("Added"); refFilter = "new";
+    });
+  });
+}
+
 // ------------------------------------------------------------------ router
 
 async function route() {
@@ -1315,6 +1475,7 @@ async function route() {
     else if (page === "accounts") await renderAccounts(query);
     else if (page === "earnings") await renderEarnings();
     else if (page === "topics") await renderTopics();
+    else if (page === "refs") await renderRefs();
     else if (page === "ab") await renderAB();
     else if (page === "channels") await renderChannels();
     else if (page === "account") await renderAccount();

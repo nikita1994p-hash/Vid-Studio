@@ -18,11 +18,11 @@ CONFIG = space.Here("accounts/telegram.json")
 STATE = space.Here("notify_state.json")     # which one-per-day alerts were already sent
 API = "https://api.telegram.org/bot{token}/{method}"
 EVENTS = {"done": "NOTIFY_DONE", "error": "NOTIFY_ERRORS", "limit": "NOTIFY_LIMITS",
-          "money": "NOTIFY_MONEY", "ab": "NOTIFY_AB", "posted": "NOTIFY_POSTED"}
+          "money": "NOTIFY_MONEY", "ab": "NOTIFY_AB", "posted": "NOTIFY_POSTED", "refs": "NOTIFY_REFS"}
 # a group with Topics on: each kind of alert goes to its own topic (made by setup_topics)
 TOPICS = {"videos": "🎬 Videos", "errors": "⚠️ Errors", "money": "💰 Money", "accounts": "👥 Accounts",
           "security": "🔐 Security"}
-TOPIC_OF = {"done": "videos", "posted": "videos", "ab": "videos", "error": "errors", "limit": "errors",
+TOPIC_OF = {"done": "videos", "posted": "videos", "ab": "videos", "refs": "videos", "error": "errors", "limit": "errors",
             "money": "money", "account": "accounts", "security": "security"}
 
 
