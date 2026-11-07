@@ -157,6 +157,8 @@ def _rate(items):
         "These Shorts took off recently. For each one decide how well its idea can become an episode of THIS",
         "channel (fit 0-100: 80+ = a clear episode, 40-79 = usable with a twist, under 40 = off-topic, a meme,",
         "a celebrity, politics, a scam, a get-rich-quick promise or not a real topic for this channel).",
+        "Investing, trading, options, crypto, bank or card sign-up bonuses, loans and any other financial product",
+        "are never a topic here (that is financial advice): fit 0-20 and an empty topic.",
         "A video in another language or about another country's market (rupees, lakh...) can still lend an idea",
         "that works for this audience, but its fit is at most 60; a fit above 60 needs an idea this audience",
         "can start at home. This channel only covers what is going viral or trending right now (new tech and AI,",
