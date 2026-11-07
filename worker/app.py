@@ -1487,6 +1487,14 @@ def check_topics():
         raise HTTPException(502, str(e))
 
 
+@app.post("/api/topics/trending")
+def trending_topics():
+    try:
+        return topics.keep_trending()
+    except pipeline.PipelineError as e:
+        raise HTTPException(502, str(e))
+
+
 @app.put("/api/topics/order")
 def order_topics(req: OrderRequest):
     topics.reorder(req.ids)

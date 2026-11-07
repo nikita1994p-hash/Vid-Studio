@@ -137,7 +137,9 @@ def suggest(count=30):
                "'Wall sit for knee strength', 'Morning light for better sleep'. No diseases, cures, drugs, "
                "supplements, diets or brand names. ")
     else:
-        ask = (f"List {count} real, boring, startable small businesses for the YouTube series "
+        ask = (f"List {count} real, startable businesses and side hustles that are going viral or trending right now "
+               "(new tech and AI services, reselling trends, creator-economy and online work, what is booming this "
+               "season - never a classic local service with nothing new about it) for the YouTube series "
                f"'{pipeline.env('SERIES_NAME') or '365 Businesses That Make Money'}' "
                f"(audience: {pipeline.env('CHANNEL_AUDIENCE', 'American viewers')}). Each one a short name of what "
                "the business does, 2-6 words, e.g. 'Mobile car detailing', 'Bounce house rentals'. No franchises, "
@@ -182,6 +184,63 @@ def suggest(count=30):
                 x["check"] = {"verdict": "ok", "note": "", "at": pipeline._now()}
         _save(queue)
     return {**res, "dropped": dropped}
+
+
+class TrendVerdict(BaseModel):
+    n: int = Field(description="the topic's number in the list")
+    trending: bool = Field(description="true if it is going viral or trending right now, or booming this season")
+    note: str = Field(description="a few words: why it is trending, or what makes it a classic")
+
+
+class TrendReview(BaseModel):
+    topics: list[TrendVerdict]
+
+
+def keep_trending(batch=80):
+    """'To film' topics that are not trending right now go to Skipped (one click brings any back).
+    Topics from References and already checked ones in this pass stay. Call until 'left' is 0."""
+    queue = _load()
+    todo = [x for x in queue if x["state"] == "todo" and not x.get("ref") and not x.get("trend")][:batch]
+    if not todo:
+        return {"checked": 0, "kept": 0, "skipped": 0, "left": 0}
+    import datetime as dt
+    listing = "\n".join(f"{i}. {x['topic']}" for i, x in enumerate(todo, 1))
+    prompt = "\n".join([
+        f"The YouTube Shorts series '{pipeline.env('SERIES_NAME') or 'this channel'}' "
+        f"(audience: {pipeline.env('CHANNEL_AUDIENCE', 'American viewers')}) now covers ONLY ways to make money",
+        "that are going viral or trending right now: new tech and AI services, reselling trends, creator-economy",
+        "and online work, social-media-driven side hustles, and what is booming this season "
+        f"(today is {dt.date.today():%B %d}).",
+        "For each topic: trending = true if people talk about it on social media now, it is new, or it booms in",
+        "the coming weeks; false for a classic local service with nothing new or viral about it. Answer for every number.",
+        "", listing])
+    client, verdicts, errors = pipeline._client(), None, []
+    for model in pipeline.text_models():
+        try:
+            text = pipeline._hard_timeout(lambda: pipeline._output(client.interactions.create(
+                model=model, input=prompt, timeout=90, system_instruction=pipeline.GUARD,
+                response_format={"type": "text", "mime_type": "application/json",
+                                 "schema": TrendReview.model_json_schema()}), "text"), 100)
+            verdicts = {v.n: v for v in TrendReview.model_validate_json(text).topics}
+            break
+        except Exception as e:
+            errors.append(f"{model}: {str(e)[:120]}")
+    if verdicts is None:
+        raise PipelineError("no model answered - " + " | ".join(errors))
+    kept = skipped = 0
+    for i, x in enumerate(todo, 1):
+        v = verdicts.get(i)
+        if not v:
+            continue
+        x["trend"] = {"trending": v.trending, "note": v.note.strip()[:120], "at": pipeline._now()}
+        if v.trending:
+            kept += 1
+        else:
+            x["state"] = "skipped"
+            skipped += 1
+    _save(queue)
+    left = sum(1 for x in queue if x["state"] == "todo" and not x.get("ref") and not x.get("trend"))
+    return {"checked": len(todo), "kept": kept, "skipped": skipped, "left": left}
 
 
 def update(item_id, topic=None, state=None):

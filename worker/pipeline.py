@@ -1775,7 +1775,7 @@ def _compare_rules():
         return []
     return ["", "COMPARISON EPISODE - this week's comparison: put this business against a glamorous, popular one",
             "people dream of (a food truck, a coffee shop, a dropshipping store, a clothing brand). The hook sets",
-            "them against each other (formula boring-vs-glamorous), the scenes compare start-up cost, money per",
+            "them against each other (formula dream-vs-real), the scenes compare start-up cost, money per",
             "month and the catch of both, and the payoff says which one wins for an ordinary person and why.",
             "on_screen texts may show both figures (e.g. 'Truck $80K vs $500'). Same honest, typical figures."]
 

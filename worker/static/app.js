@@ -1139,7 +1139,8 @@ async function renderTopics() {
             <label class="check" style="margin:0"><input type="checkbox" name="top"> put them first</label></div></form>
         <div class="actions">
           <button class="btn btn-outline" id="topic-starter">📋 Load ~400 starter ideas</button>
-          <button class="btn btn-outline" id="topic-suggest">✨ 30 fresh ideas from Gemini</button></div>
+          <button class="btn btn-outline" id="topic-suggest">✨ 30 fresh ideas from Gemini</button>
+          <button class="btn btn-outline" id="topic-trending" title="Gemini moves topics that are not viral or trending right now to Skipped (↺ brings any back)">🔥 Keep only trending</button></div>
         <div class="actions"><button class="btn btn-outline" id="topic-check" ${t.unchecked ? "" : "disabled"}>✔ Check topics${t.unchecked ? ` (${t.unchecked} unchecked)` : " — all checked"}</button>
           ${t.doubt ? `<span class="chip error" title="Marked by the check — skip, rename or delete them">${t.doubt} doubtful</span>` : ""}</div>
         <p class="muted" style="font-size:12px;margin-bottom:0">Gemini fixes typos and wording and marks anything that isn't a real, legal, startable business. Fresh ideas are checked automatically.</p></section>
@@ -1152,7 +1153,7 @@ async function renderTopics() {
         <li class="topic ${esc(x.state)}" data-id="${esc(x.id)}" ${canDrag ? 'draggable="true"' : ""}>
           ${canDrag ? '<span class="grip" title="Drag to reorder">⋮⋮</span>' : ""}
           <span class="topic-n">${i + 1}</span>
-          <span class="topic-name">${esc(x.topic)}${topicCheck(x.check)}${x.ref ? ` <a class="chip variant" href="${esc(x.ref.url)}" target="_blank" rel="noopener noreferrer" title="From References: ${esc(x.ref.title)} — ${compact(x.ref.views)} views">reference ↗</a>` : ""}</span>
+          <span class="topic-name">${esc(x.topic)}${topicCheck(x.check)}${x.trend?.note ? ` <span class="muted topic-note">${x.trend.trending ? "🔥 " : ""}${esc(x.trend.note)}</span>` : ""}${x.ref ? ` <a class="chip variant" href="${esc(x.ref.url)}" target="_blank" rel="noopener noreferrer" title="From References: ${esc(x.ref.title)} — ${compact(x.ref.views)} views">reference ↗</a>` : ""}</span>
           ${topicFilter === "all" ? `<span class="chip ${x.state === "used" ? "done" : "queued"}">${STATE[x.state]}</span>` : ""}
           ${x.job_id ? `<a href="#/video/${esc(x.job_id)}">video →</a>` : ""}
           <span class="topic-actions">
@@ -1191,6 +1192,22 @@ async function renderTopics() {
       const r = await api("/api/topics/suggest", { method: "POST", body: JSON.stringify({ count: 30 }) });
       toast(`Added ${r.added} new ideas${r.dropped?.length ? ` · dropped ${r.dropped.length} doubtful: ${r.dropped.join("; ")}` : ""}`);
     });
+  });
+  $("#topic-trending").addEventListener("click", async (ev) => {
+    if (!confirm("Move every 'to film' topic that is not viral or trending right now to Skipped? (↺ in Skipped brings any back.)")) return;
+    const btn = ev.target;
+    btn.disabled = true;
+    let kept = 0, skipped = 0;
+    try {
+      for (;;) {   // 80 topics per call
+        btn.textContent = `🔥 Checking… ${kept} kept, ${skipped} skipped`;
+        const r = await api("/api/topics/trending", { method: "POST" });
+        kept += r.kept; skipped += r.skipped;
+        if (!r.left || !r.checked) break;
+      }
+      toast(`Kept ${kept} trending topics, moved ${skipped} to Skipped`);
+    } catch (e) { toast(e.message, true); }
+    renderTopics();
   });
   $("#topic-check")?.addEventListener("click", async (ev) => {
     const btn = ev.target;

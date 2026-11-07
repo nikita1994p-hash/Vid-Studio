@@ -29,7 +29,7 @@ from pipeline import PipelineError
 REFS = space.Here("refs.json")
 API = "https://www.googleapis.com/youtube/v3"
 DEFAULT_QUERIES = {
-    "business": "side hustle ideas,small business ideas,business that makes money,boring business",
+    "business": "viral side hustle,trending side hustle,side hustle ideas,small business ideas,business that makes money",
     "health": "health tips,exercise tips,healthy habits",
 }
 
@@ -159,7 +159,10 @@ def _rate(items):
         "a celebrity, politics, a scam, a get-rich-quick promise or not a real topic for this channel).",
         "A video in another language or about another country's market (rupees, lakh...) can still lend an idea",
         "that works for this audience, but its fit is at most 60; a fit above 60 needs an idea this audience",
-        "can start at home. For each one also give why it took off (the hook, the angle or the format), the",
+        "can start at home. This channel only covers what is going viral or trending right now (new tech and AI,",
+        "reselling trends, creator-economy and online work, seasonal booms): a classic local service with nothing",
+        "new about it (laundromat, vending machines, car wash, cleaning...) gets a fit of at most 40.",
+        "For each one also give why it took off (the hook, the angle or the format), the",
         "topic it becomes here and the angle that keeps what worked. Never copy its title or words.",
         "Answer for every number.",
         "",
