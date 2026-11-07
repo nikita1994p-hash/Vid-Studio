@@ -29,7 +29,7 @@ from pipeline import PipelineError
 REFS = space.Here("refs.json")
 API = "https://www.googleapis.com/youtube/v3"
 DEFAULT_QUERIES = {
-    "business": "viral side hustle,trending side hustle,side hustle ideas,small business ideas,business that makes money",
+    "business": "ai side hustle,tiktok shop side hustle,reselling side hustle,how much I made side hustle,viral side hustle,side hustle ideas",
     "health": "health tips,exercise tips,healthy habits",
 }
 
@@ -97,16 +97,45 @@ def _details(bearer, ids):
     return out
 
 
-def _subs(bearer, channel_ids):
+def _subs(bearer, channel_ids, countries=None):
+    """{channel id: subscribers or None}; countries (a dict) also gets {channel id: 'IN', 'US'...}."""
     out = {}
     ids = sorted({c for c in channel_ids if c})
     for i in range(0, len(ids), 50):
         items = social._call("GET", f"{API}/channels", headers=bearer, params={
-            "part": "statistics", "id": ",".join(ids[i:i + 50])}).get("items") or []
+            "part": "statistics,snippet", "id": ",".join(ids[i:i + 50])}).get("items") or []
         for c in items:
             st = c.get("statistics") or {}
             out[c["id"]] = None if st.get("hiddenSubscriberCount") else int(st.get("subscriberCount", 0) or 0)
+            if countries is not None:
+                countries[c["id"]] = ((c.get("snippet") or {}).get("country") or "").upper()
     return out
+
+
+# Indian Shorts fill the results for money phrases even with regionCode=US, and their rupee economics
+# never fit an American audience: they are dropped outright.
+_INDIC = re.compile(r"[ऀ-෿]")
+_INDIA_STRONG = re.compile(r"₹|\brs\.?\s?\d|\brupees?\b|\blakhs?\b|\blakhon\b|\bcrores?\b|\bindia\b|\bindian\b|"
+                           r"\bkamai\b|\bkamao\b|\bpaise\b|\bpaisa\b|\bdesi\b|\bbharat\b", re.I)
+_HINGLISH = {"hai", "ka", "ke", "ki", "se", "kaise", "kya", "wala", "wali", "wale", "banane", "karke", "karo",
+             "bhai", "mein", "aur", "nahi", "sirf", "bas", "ghar", "kaam", "apna", "apne", "yeh", "ye", "bhi", "ho"}
+_INDIAN_LANGS = ("hi", "en-in", "bn", "ta", "te", "mr", "gu", "kn", "ml", "pa", "ur", "or", "as")
+
+
+def _indian(v, country=""):
+    """True for a Short from India: the channel's country, the video's language, Indic script, rupee
+    figures or Hinglish words in the title or description."""
+    sn = v.get("snippet") or {}
+    if country == "IN":
+        return True
+    langs = [(sn.get(k) or "").lower() for k in ("defaultAudioLanguage", "defaultLanguage")]
+    if any(lang == code or lang.startswith(code + "-") for lang in langs for code in _INDIAN_LANGS):
+        return True
+    text = f"{sn.get('title', '')} {sn.get('description', '')} {sn.get('channelTitle', '')}"
+    if _INDIC.search(text) or _INDIA_STRONG.search(text):
+        return True
+    words = re.findall(r"[a-z]+", (sn.get("title") or "").lower())
+    return sum(w in _HINGLISH for w in words) >= 2
 
 
 def _item(v, subs, query):
@@ -135,6 +164,8 @@ class RefVerdict(BaseModel):
     why: str = Field(description="why it took off: the hook, the angle or the format, max 20 words")
     topic: str = Field(description="the topic it becomes on this channel, 2-6 words; empty if none fits")
     angle: str = Field(description="how to tell that topic on this channel using what worked, max 25 words")
+    market: str = Field(description="who the video is made for: 'india' (Indian names, Hindi or Hinglish, rupees, "
+                                    "Indian places or channel), 'non-english' (another language), or 'english'")
 
 
 class RefReview(BaseModel):
@@ -186,6 +217,7 @@ def _rate(items):
     for i, x in enumerate(items, 1):
         v = verdicts.get(i)
         if v:
+            x["market"] = (v.market or "").strip().lower()
             x.update(fit=max(0, min(100, v.fit)), why=pipeline.strip_contacts(v.why)[:200],
                      topic=" ".join(v.topic.split())[:80], angle=pipeline.strip_contacts(v.angle)[:240])
 
@@ -213,7 +245,7 @@ def search(force=False):
         for q in queries():
             res = social._call("GET", f"{API}/search", headers=bearer, params={   # 100 quota units each
                 "part": "id", "q": q, "type": "video", "videoDuration": "short", "order": "viewCount",
-                "publishedAfter": after, "maxResults": 25, "regionCode": pipeline.env("YOUTUBE_REGION", "US"),
+                "publishedAfter": after, "maxResults": 50, "regionCode": pipeline.env("YOUTUBE_REGION", "US"),
                 "relevanceLanguage": pipeline.env("CHANNEL_LANGUAGE", "en"), "safeSearch": "strict"})
             for r in res.get("items") or []:
                 vid = (r.get("id") or {}).get("videoId")
@@ -221,23 +253,31 @@ def search(force=False):
                     found.setdefault(vid, q)
             done.append(q)
         details = _details(bearer, list(found))
-        subs = _subs(bearer, [(v.get("snippet") or {}).get("channelId") for v in details.values()])
+        countries = {}
+        subs = _subs(bearer, [(v.get("snippet") or {}).get("channelId") for v in details.values()], countries)
     except Exception as e:
         data["last_error"] = str(e)[:300]
         data["last_search"] = pipeline._now()   # a quota error must not retry every 15 minutes
         _save(data)
         raise
     min_views = int(pipeline._num("REF_MIN_VIEWS", 20000))
-    new = []
+    new, indian = [], 0
     for vid, v in details.items():
         x = _item(v, subs, found[vid])
         if x["channel_id"] == own or x["seconds"] > 180 or x["views"] < min_views:
             continue   # our own videos, long videos and small ones
+        if _indian(v, countries.get(x["channel_id"], "")):
+            indian += 1
+            continue
         new.append(x)
     # the video beat its channel first (a big channel's average Short is no lesson), then raw views
     new.sort(key=lambda x: (x["outlier"] or 0, x["views"]), reverse=True)
-    new = new[:max(4, min(30, int(pipeline._num("REF_KEEP", 12))))]
+    keep = max(4, min(30, int(pipeline._num("REF_KEEP", 12))))
+    new = new[:keep * 2]   # rated, then Indian and non-English ones the API could not tell are dropped
     _rate(new)
+    foreign = [x for x in new if x.get("market") in ("india", "non-english")]
+    indian += len(foreign)
+    new = [x for x in new if x not in foreign][:keep]
     data["items"] = new + data["items"]
     data["last_search"], data["last_error"] = pipeline._now(), ""
     _save(data)
@@ -251,7 +291,26 @@ def search(force=False):
             + [f"• {x['title'][:70]} — {_short(x['views'])} views"
                + (f", ×{x['outlier']} its subscribers" if x["outlier"] else "") for x in top]
             + [f"{base}/#/refs"]))
-    return {"added": len(new), "fit": len(good), "searched": done}
+    return {"added": len(new), "fit": len(good), "dropped_indian": indian, "searched": done}
+
+
+def purge_indian():
+    """Remove Indian Shorts already in References (new or skipped; a taken one stays with its topic)."""
+    data = _load()
+    ids = [x["id"] for x in data["items"] if x["state"] != "taken"]
+    if not ids:
+        return {"removed": 0}
+    bearer = _bearer()
+    details = _details(bearer, ids)
+    countries = {}
+    _subs(bearer, [(v.get("snippet") or {}).get("channelId") for v in details.values()], countries)
+    drop = {i for i, v in details.items() if _indian(v, countries.get((v.get("snippet") or {}).get("channelId"), ""))}
+    rest = [x for x in data["items"] if x["state"] != "taken" and x["id"] not in drop]
+    _rate(rest)   # the model also tells Indian and non-English Shorts by their names, words and places
+    drop |= {x["id"] for x in rest if x.get("market") in ("india", "non-english")}
+    data["items"] = [x for x in data["items"] if x["id"] not in drop]
+    _save(data)
+    return {"removed": len(drop), "left": len(data["items"])}
 
 
 def add_url(url):
