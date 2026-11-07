@@ -1527,7 +1527,7 @@ def segment_from_image(img, frames, idx, out, overlay="", loop=False, size=None)
     # zoompan cost grows with the source size; 1.4x is smooth enough and ~2x faster than 2x on a laptop CPU
     sw, sh = int(w_ * 1.4) // 2 * 2, int(h_ * 1.4) // 2 * 2
     vf = (f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={sw}:{sh},"
-          f"zoompan=z='{z}':x='{x}':y='ih/2-(ih/zoom/2)':d={frames}:s={w_}x{h_}:fps={FPS}"
+          f"zoompan=z='{z}':x='{x}':y='ih/2-(ih/zoom/2)':d={frames}:s={w_}x{h_}:fps={FPS},setsar=1"
           + (f",{overlay}" if overlay else ""))
     _ffmpeg(["-i", str(img), "-vf", vf, "-frames:v", str(frames), *_encode_args(), out.name],
             cwd=out.parent)
@@ -1549,7 +1549,7 @@ def segment_two(job, s, frames, idx, out):
                 f.write_text(name, encoding="utf-8")
                 tags.append(f"drawtext=fontfile={FONT_BOLD}:textfile={f.name}:fontsize=58:fontcolor=white"
                             f":box=1:boxcolor=black@0.7:boxborderw=14:x={x}:y=1480")
-            graph = (f"[0:v][1:v]hstack=inputs=2,drawbox=x={W // 2 - 3}:y=0:w=6:h=ih:color=white@0.9:t=fill,"
+            graph = (f"[0:v]setsar=1[x];[1:v]setsar=1[y];[x][y]hstack=inputs=2,drawbox=x={W // 2 - 3}:y=0:w=6:h=ih:color=white@0.9:t=fill,"
                      + ",".join(tags) + f",{overlay}[v]")
             _ffmpeg(["-i", b.name, "-i", a.name, "-filter_complex", graph, "-map", "[v]",
                      "-frames:v", str(frames), *_encode_args(), out.name], cwd=job)
@@ -1561,7 +1561,7 @@ def segment_two(job, s, frames, idx, out):
         else:
             segment_from_image(s["visual2"], frames - first, idx + 1, b)
         _ffmpeg(["-i", a.name, "-i", b.name, "-filter_complex",
-                 f"[0:v][1:v]concat=n=2:v=1:a=0,{overlay}[v]", "-map", "[v]",
+                 f"[0:v]setsar=1[x];[1:v]setsar=1[y];[x][y]concat=n=2:v=1:a=0,{overlay}[v]", "-map", "[v]",
                  "-frames:v", str(frames), *_encode_args(), out.name], cwd=job)
     finally:
         a.unlink(missing_ok=True)
@@ -1569,7 +1569,8 @@ def segment_two(job, s, frames, idx, out):
 
 
 def segment_from_video(clip, frames, out, overlay=""):
-    vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},"
+    # stock clips can carry an odd pixel aspect (e.g. SAR 12800:12797); concat needs square pixels
+    vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,fps={FPS},"
           "tpad=stop_mode=clone:stop_duration=60" + (f",{overlay}" if overlay else ""))
     _ffmpeg(["-i", str(clip), "-vf", vf, "-frames:v", str(frames), *_encode_args(), out.name],
             cwd=out.parent)
@@ -1940,6 +1941,9 @@ def pixabay_clip(query, path, used):
 
     def pick(h):
         files = [f for f in (h.get("videos") or {}).values() if f.get("url") and (f.get("width") or 0) >= 640]
+        # a 4K landscape file can be 250 MB for two seconds of screen time: skip files over 60 MB when a
+        # smaller size exists
+        files = [f for f in files if (f.get("size") or 0) <= 60_000_000] or files
         return min(files, key=lambda f: abs((f.get("height") or 0) - H), default=None)
 
     # Pixabay matches loosely ("christmas tree lot" finds dark particle loops): the clip's own tags must
