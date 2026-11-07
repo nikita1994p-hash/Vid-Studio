@@ -29,7 +29,7 @@ from pipeline import PipelineError
 REFS = space.Here("refs.json")
 API = "https://www.googleapis.com/youtube/v3"
 DEFAULT_QUERIES = {
-    "business": "ai side hustle,tiktok shop side hustle,reselling side hustle,how much I made side hustle,viral side hustle,side hustle ideas",
+    "business": "business ideas,ai side hustle,tiktok shop side hustle,reselling side hustle,how much I made side hustle,viral side hustle,side hustle ideas",
     "health": "health tips,exercise tips,healthy habits",
 }
 
@@ -68,7 +68,7 @@ def _seconds(iso):
 def queries():
     own = [q.strip() for q in pipeline.env("REF_QUERIES").split(",") if q.strip()]
     if own:
-        return own[:6]
+        return own[:8]
     kind = pipeline.env("NICHE_KIND", "business")
     return DEFAULT_QUERIES.get(kind, DEFAULT_QUERIES["business"]).split(",")
 
